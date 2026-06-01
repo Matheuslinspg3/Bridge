@@ -13,12 +13,6 @@ const __dirname = path.dirname(__filename);
 // ============================================================
 // 2. HELPERS
 // ============================================================
-const envInt = (key, def) => {
-  const v = process.env[key];
-  const n = parseInt(v, 10);
-  return isNaN(n) ? def : n;
-};
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const round4 = (n) => Math.round(n * 10000) / 10000;
@@ -79,20 +73,8 @@ const loadConfig = () => {
     const raw = fs.readFileSync(CONFIG_PATH, "utf8");
     return deepMerge(DEFAULT_CONFIG, JSON.parse(raw));
   } catch {
-    // fallback: legacy env vars
-    const cfg = deepMerge({}, DEFAULT_CONFIG);
-    if (process.env.PROXY_API_KEY) cfg.proxyApiKey = process.env.PROXY_API_KEY;
-    if (process.env.DASHBOARD_PASSWORD) cfg.dashboardPassword = process.env.DASHBOARD_PASSWORD;
-    if (process.env.UPSTREAM_URL) {
-      cfg.upstreams = [{
-        id: genId(),
-        name: "default",
-        baseUrl: process.env.UPSTREAM_URL.replace(/\/$/, ""),
-        apiKey: process.env.UPSTREAM_API_KEY || "",
-        enabled: true,
-      }];
-    }
-    return cfg;
+    // Sem config.json — retorna defaults. Tudo é configurado pelo dashboard.
+    return deepMerge({}, DEFAULT_CONFIG);
   }
 };
 
@@ -114,7 +96,7 @@ const getEnabledUpstreams = () =>
 const app = express();
 app.use(express.json({ limit: "4mb" }));
 
-const PORT = envInt("PORT", 8787);
+const PORT = Number(process.env.PORT) || 8787;
 
 dns.setDefaultResultOrder("ipv4first");
 
