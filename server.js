@@ -1,212 +1,263 @@
+// ============================================================
+// 1. IMPORTS
+// ============================================================
 import express from "express";
-import dns from "node:dns";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import dns from "dns";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/* =========================================================
-   HELPERS (declared first so env constants can use them)
-   ========================================================= */
-function envInt(name, fallback) {
-  const v = Number(process.env[name]);
-  return Number.isFinite(v) && v >= 0 ? v : fallback;
-}
-function envBool(name, fallback) {
-  const v = process.env[name];
-  if (v === undefined || v === null || v === "") return fallback;
-  return ["1","true","yes","on"].includes(String(v).toLowerCase());
-}
-function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
-function round4(n){ return Math.round(n * 10000) / 10000; }
-function dayKey(d = new Date()){ return d.toISOString().slice(0, 10); }
+// ============================================================
+// 2. HELPERS
+// ============================================================
+const envInt = (key, def) => {
+  const v = process.env[key];
+  const n = parseInt(v, 10);
+  return isNaN(n) ? def : n;
+};
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const round4 = (n) => Math.round(n * 10000) / 10000;
+
+const dayKey = () => new Date().toISOString().slice(0, 10);
+
+let _idSeq = 0;
+const genId = () => `${Date.now().toString(36)}-${(++_idSeq).toString(36)}`;
+
+const maskKey = (key) => {
+  if (!key || key.length < 8) return "***";
+  return key.slice(0, 4) + "..." + key.slice(-4);
+};
+
+// ============================================================
+// 3. CONFIG PERSISTENCE
+// ============================================================
+const CONFIG_PATH = (() => {
+  try {
+    fs.accessSync("/app/config.json", fs.constants.W_OK);
+    return "/app/config.json";
+  } catch {
+    return path.join(__dirname, "config.json");
+  }
+})();
+
+const DEFAULT_CONFIG = {
+  dashboardPassword: "admin",
+  proxyApiKey: "",
+  defaultModel: "claude-opus-4-7",
+  upstreams: [],
+  retry: { infinite: true, attempts: 5, baseDelayMs: 1000, maxDelayMs: 20000, jitterMs: 750 },
+  concurrency: { maxConcurrency: 1, minIntervalMs: 1500, timeoutMs: 180000 },
+  circuit: { failures: 3, cooldownMs: 60000 },
+  openclawForceNonStreamRetry: true,
+  guardrails: {
+    pii: { enabled: true },
+    maxTokens: { enabled: true, limit: 8192 },
+    budget: { enabled: true, dailyUsd: 10, inputPerMillion: 15, outputPerMillion: 75 },
+    modelSwap: { enabled: true },
+  },
+};
+
+const deepMerge = (target, source) => {
+  const out = { ...target };
+  for (const key of Object.keys(source)) {
+    if (source[key] && typeof source[key] === "object" && !Array.isArray(source[key])) {
+      out[key] = deepMerge(target[key] || {}, source[key]);
+    } else {
+      out[key] = source[key];
+    }
+  }
+  return out;
+};
+
+const loadConfig = () => {
+  try {
+    const raw = fs.readFileSync(CONFIG_PATH, "utf8");
+    return deepMerge(DEFAULT_CONFIG, JSON.parse(raw));
+  } catch {
+    // fallback: legacy env vars
+    const cfg = deepMerge({}, DEFAULT_CONFIG);
+    if (process.env.PROXY_API_KEY) cfg.proxyApiKey = process.env.PROXY_API_KEY;
+    if (process.env.DASHBOARD_PASSWORD) cfg.dashboardPassword = process.env.DASHBOARD_PASSWORD;
+    if (process.env.UPSTREAM_URL) {
+      cfg.upstreams = [{
+        id: genId(),
+        name: "default",
+        baseUrl: process.env.UPSTREAM_URL.replace(/\/$/, ""),
+        apiKey: process.env.UPSTREAM_API_KEY || "",
+        enabled: true,
+      }];
+    }
+    return cfg;
+  }
+};
+
+const saveConfig = (cfg) => {
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), "utf8");
+};
+
+let config = loadConfig();
+
+const isConfigured = () =>
+  config.upstreams.length > 0 && !!config.proxyApiKey && !!config.dashboardPassword;
+
+const getEnabledUpstreams = () =>
+  (config.upstreams || []).filter((u) => u.enabled !== false);
+
+// ============================================================
+// 4. EXPRESS APP, PORT, DNS, STARTED_AT
+// ============================================================
 const app = express();
-app.use(express.json({ limit: "20mb" }));
+app.use(express.json({ limit: "4mb" }));
 
-const PORT = process.env.PORT || 8787;
-const UPSTREAM_BASE_URL = (process.env.UPSTREAM_BASE_URL || "https://api.nuoda.vip").replace(/\/$/, "");
-const UPSTREAM_API_KEY = process.env.UPSTREAM_API_KEY;
-const DEFAULT_MODEL = process.env.DEFAULT_MODEL || "claude-opus-4-7";
-const PROXY_API_KEY = process.env.PROXY_API_KEY;
-const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || PROXY_API_KEY;
-const UPSTREAM_INFINITE_RETRY = envBool("UPSTREAM_INFINITE_RETRY", true);
+const PORT = envInt("PORT", 8787);
 
-try { dns.setDefaultResultOrder("ipv4first"); } catch (_) {}
+dns.setDefaultResultOrder("ipv4first");
 
-const STARTED_AT = Date.now();
+const STARTED_AT = new Date().toISOString();
 
-/* =========================================================
-   ERROR LOG — last 200 entries
-   ========================================================= */
+// ============================================================
+// 5. ERROR LOG
+// ============================================================
 let errorLogIdSeq = 0;
 const errorLog = [];
 
-function pushErrorLog({ route, method, status, type, message, body_snippet, retries_taken, upstream_url, duration_ms }) {
-  const entry = {
+const pushErrorLog = (entry) => {
+  errorLog.push({
     id: ++errorLogIdSeq,
-    at: new Date().toISOString(),
-    route: route || "",
-    method: method || "",
-    status: status || 0,
-    type: type || "bridge_error",
-    message: String(message || ""),
-    body_snippet: body_snippet ? String(body_snippet).slice(0, 500) : "",
-    retries_taken: retries_taken || 0,
-    upstream_url: upstream_url || "",
-    duration_ms: duration_ms || 0
-  };
-  errorLog.unshift(entry);
-  if (errorLog.length > 200) errorLog.length = 200;
-  return entry.id;
-}
+    ts: new Date().toISOString(),
+    ...entry,
+  });
+  if (errorLog.length > 500) errorLog.splice(0, errorLog.length - 500);
+};
 
+// ============================================================
+// 6. BRIDGE STATE
+// ============================================================
 const bridgeState = {
   active: 0,
-  lastStart: 0,
+  lastStart: null,
   consecutiveFailures: 0,
-  circuitUntil: 0
+  circuitUntil: 0,
 };
 
-/* =========================================================
-   GUARDRAILS — config padrão (override por env, mutável em runtime via /admin)
-   ========================================================= */
-const guardrails = {
-  pii: {
-    enabled: envBool("GR_PII_ENABLED", true),
-    blocked: 0,
-    lastBlockAt: null,
-    patterns: [
-      { name: "cpf",   re: /\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g },
-      { name: "email", re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
-      { name: "card",  re: /\b(?:\d[ -]*?){13,19}\b/g },
-      { name: "phone", re: /\(?\d{2}\)?\s?9?\d{4}-?\d{4}\b/g }
-    ]
-  },
-  maxTokens: {
-    enabled: envBool("GR_MAX_TOKENS_ENABLED", true),
-    limit: envInt("GR_MAX_TOKENS_LIMIT", 8192),
-    blocked: 0,
-    lastBlockAt: null
-  },
-  budget: {
-    enabled: envBool("GR_BUDGET_ENABLED", true),
-    dailyUsd: Number(process.env.GR_BUDGET_DAILY_USD || 10),
-    pricing: {
-      inputPerMillion:  Number(process.env.PRICING_INPUT_PER_MILLION  || 15),
-      outputPerMillion: Number(process.env.PRICING_OUTPUT_PER_MILLION || 75)
-    },
-    todayKey: dayKey(),
-    todaySpentUsd: 0,
-    totalSpentUsd: 0,
-    history: [], // [{day,spentUsd}]
-    blocked: 0,
-    lastBlockAt: null
-  },
-  modelSwap: {
-    enabled: envBool("GR_MODEL_SWAP_ENABLED", true),
-    detected: 0,
-    swaps: []    // últimos 100 [{at,route,requested,returned}]
+const upstreamStats = {};
+
+const getUpstreamStat = (id) => {
+  if (!upstreamStats[id]) {
+    upstreamStats[id] = {
+      requests: 0,
+      success: 0,
+      errors: 0,
+      retries: 0,
+      lastUsed: null,
+      lastError: null,
+      lastErrorTs: null,
+    };
   }
+  return upstreamStats[id];
 };
 
-function rotateBudgetIfNeeded() {
+// ============================================================
+// 7. GUARDRAILS RUNTIME STATE
+// ============================================================
+const grState = {
+  pii: {},
+  maxTokens: {},
+  budget: { day: dayKey(), usedUsd: 0 },
+  modelSwap: {},
+};
+
+const rotateBudgetIfNeeded = () => {
   const today = dayKey();
-  if (today !== guardrails.budget.todayKey) {
-    guardrails.budget.history.unshift({
-      day: guardrails.budget.todayKey,
-      spentUsd: round4(guardrails.budget.todaySpentUsd)
-    });
-    if (guardrails.budget.history.length > 30) guardrails.budget.history.length = 30;
-    guardrails.budget.todayKey = today;
-    guardrails.budget.todaySpentUsd = 0;
+  if (grState.budget.day !== today) {
+    grState.budget.day = today;
+    grState.budget.usedUsd = 0;
   }
-}
+};
 
-function estimateUsd(usage) {
-  const inT = usage?.input_tokens || usage?.prompt_tokens || 0;
-  const outT = usage?.output_tokens || usage?.completion_tokens || 0;
-  const p = guardrails.budget.pricing;
-  return (inT * p.inputPerMillion + outT * p.outputPerMillion) / 1_000_000;
-}
+const estimateUsd = (inputTokens, outputTokens) => {
+  const g = config.guardrails.budget;
+  const inCost = (inputTokens / 1_000_000) * (g.inputPerMillion || 15);
+  const outCost = (outputTokens / 1_000_000) * (g.outputPerMillion || 75);
+  return round4(inCost + outCost);
+};
 
-function flattenMessageText(messages) {
+const flattenMessageText = (messages) => {
   if (!Array.isArray(messages)) return "";
-  return messages.map((m) => {
-    if (typeof m?.content === "string") return m.content;
-    if (Array.isArray(m?.content)) {
-      return m.content.map((p) => (typeof p === "string" ? p : p?.text || "")).join(" ");
-    }
-    return "";
-  }).join("\n");
-}
+  return messages
+    .map((m) => {
+      if (typeof m.content === "string") return m.content;
+      if (Array.isArray(m.content))
+        return m.content
+          .filter((c) => c.type === "text")
+          .map((c) => c.text)
+          .join(" ");
+      return "";
+    })
+    .join(" ");
+};
 
-function detectPII(text) {
-  if (!guardrails.pii.enabled) return null;
-  for (const { name, re } of guardrails.pii.patterns) {
-    re.lastIndex = 0;
-    if (re.test(text)) return name;
-  }
-  return null;
-}
+const PII_PATTERNS = [
+  /\b\d{3}-\d{2}-\d{4}\b/,
+  /\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/,
+  /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/,
+  /\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b/,
+  /\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b/,
+];
 
-function preflightGuardrails(body) {
-  // PII
-  const text = flattenMessageText(body?.messages);
-  const piiHit = detectPII(text);
-  if (piiHit) {
-    guardrails.pii.blocked++;
-    guardrails.pii.lastBlockAt = new Date().toISOString();
-    return { blocked: true, by: "pii", reason: `PII detectado: ${piiHit}` };
-  }
-  // max_tokens
-  if (guardrails.maxTokens.enabled) {
-    const mt = Number(body?.max_tokens || body?.max_completion_tokens || 0);
-    if (mt > guardrails.maxTokens.limit) {
-      guardrails.maxTokens.blocked++;
-      guardrails.maxTokens.lastBlockAt = new Date().toISOString();
-      return { blocked: true, by: "max_tokens", reason: `max_tokens ${mt} > limite ${guardrails.maxTokens.limit}` };
+const detectPII = (text) => PII_PATTERNS.some((p) => p.test(text));
+
+const preflightGuardrails = (body, route) => {
+  const gr = config.guardrails;
+  const messages = body.messages || [];
+
+  if (gr.pii?.enabled) {
+    const text = flattenMessageText(messages);
+    if (detectPII(text)) {
+      metrics.guardrailBlocks++;
+      return { blocked: true, reason: "pii_detected", status: 400 };
     }
   }
-  // budget
-  if (guardrails.budget.enabled) {
+
+  if (gr.maxTokens?.enabled) {
+    const limit = gr.maxTokens.limit || 8192;
+    const requested = body.max_tokens || body.maxTokens || 0;
+    if (requested > limit) {
+      metrics.guardrailBlocks++;
+      return { blocked: true, reason: "max_tokens_exceeded", status: 400 };
+    }
+  }
+
+  if (gr.budget?.enabled) {
     rotateBudgetIfNeeded();
-    if (guardrails.budget.todaySpentUsd >= guardrails.budget.dailyUsd) {
-      guardrails.budget.blocked++;
-      guardrails.budget.lastBlockAt = new Date().toISOString();
-      return { blocked: true, by: "budget", reason: `Orçamento diário atingido: $${guardrails.budget.todaySpentUsd.toFixed(4)} / $${guardrails.budget.dailyUsd}` };
+    const daily = gr.budget.dailyUsd || 10;
+    if (grState.budget.usedUsd >= daily) {
+      metrics.guardrailBlocks++;
+      return { blocked: true, reason: "budget_exceeded", status: 429 };
     }
   }
+
   return { blocked: false };
-}
+};
 
-function recordUsage({ requestedModel, returnedModel, usage, route }) {
-  // budget
-  if (guardrails.budget.enabled && usage) {
-    rotateBudgetIfNeeded();
-    const cost = estimateUsd(usage);
-    guardrails.budget.todaySpentUsd += cost;
-    guardrails.budget.totalSpentUsd += cost;
-  }
-  // model swap
-  if (guardrails.modelSwap.enabled && requestedModel && returnedModel) {
-    if (String(returnedModel).trim() !== String(requestedModel).trim()) {
-      guardrails.modelSwap.detected++;
-      guardrails.modelSwap.swaps.unshift({
-        at: new Date().toISOString(),
-        route,
-        requested: requestedModel,
-        returned: returnedModel
-      });
-      if (guardrails.modelSwap.swaps.length > 100) guardrails.modelSwap.swaps.length = 100;
-    }
-  }
-}
+const recordUsage = (usage) => {
+  if (!usage) return;
+  const inputTokens = usage.input_tokens || usage.prompt_tokens || 0;
+  const outputTokens = usage.output_tokens || usage.completion_tokens || 0;
+  rotateBudgetIfNeeded();
+  grState.budget.usedUsd = round4(
+    grState.budget.usedUsd + estimateUsd(inputTokens, outputTokens)
+  );
+};
 
-/* =========================================================
-   MÉTRICAS
-   ========================================================= */
+// ============================================================
+// 8. METRICS
+// ============================================================
 const metrics = {
   totalRequests: 0,
   totalSuccess: 0,
@@ -215,595 +266,714 @@ const metrics = {
   circuitOpenedCount: 0,
   lastCircuitOpenAt: null,
   guardrailBlocks: 0,
-  byRoute: {
-    "/v1/chat/completions": { ok: 0, err: 0, totalMs: 0, count: 0 },
-    "/v1/messages":         { ok: 0, err: 0, totalMs: 0, count: 0 },
-    "/v1/models":           { ok: 0, err: 0, totalMs: 0, count: 0 }
-  },
-  recent: []
+  byRoute: {},
+  recent: [],
 };
 
-function pushRecent(entry) {
-  metrics.recent.unshift({ ...entry, at: new Date().toISOString() });
-  if (metrics.recent.length > 80) metrics.recent.length = 80;
-}
+const pushRecent = (entry) => {
+  metrics.recent.unshift({ ts: new Date().toISOString(), ...entry });
+  if (metrics.recent.length > 100) metrics.recent.length = 100;
+};
 
-/* =========================================================
-   RETRY / CIRCUIT HELPERS
-   ========================================================= */
-function isRetryableStatus(s){ return [408,409,425,429,500,502,503,504,529].includes(s); }
-function isDefinitiveStatus(s){ return [400,401,403,404,422].includes(s); }
-function normalizeText(t){
-  return String(t||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
-}
-function isRetryableText(text){
-  const n = normalizeText(text);
-  return n && (
-    n.includes("service_temporarily_unavailable") ||
-    n.includes("temporariamente indisponivel") ||
-    n.includes("servidor sobrecarregado") ||
-    n.includes("aguarde alguns segundos") ||
-    n.includes("envie novamente") ||
-    n.includes("overloaded_error") || n.includes("server overloaded") || n.includes("overloaded") ||
-    n.includes("too busy") || n.includes("capacity") ||
-    n.includes("rate_limit_error") || n.includes("rate limit") ||
-    n.includes("eai_again") || n.includes("etimedout") || n.includes("econnreset") ||
-    // padrões nuoda / new-api (chinês)
-    text.includes("没有可用token") || text.includes("渠道异常") ||
-    text.includes("无可用渠道") || text.includes("当前分组") ||
-    n.includes("no available channel") || n.includes("channel error")
+// ============================================================
+// 9. RETRY HELPERS
+// ============================================================
+const isRetryableStatus = (status) =>
+  [429, 500, 502, 503, 504].includes(status);
+
+const isDefinitiveStatus = (status) =>
+  status >= 400 && status < 500 && status !== 429;
+
+const normalizeText = (t) => (t || "").toLowerCase();
+
+const isRetryableText = (text) => {
+  const t = normalizeText(text);
+  return (
+    t.includes("rate limit") ||
+    t.includes("overloaded") ||
+    t.includes("capacity") ||
+    t.includes("try again") ||
+    t.includes("timeout") ||
+    t.includes("connection") ||
+    t.includes("econnreset") ||
+    t.includes("econnrefused") ||
+    t.includes("socket hang up") ||
+    t.includes("没有可用token") ||
+    t.includes("渠道异常") ||
+    t.includes("无可用渠道") ||
+    t.includes("当前分组")
   );
-}
-function isDefinitiveText(text){
-  const n = normalizeText(text);
-  return n && (
-    n.includes("auth_required") || n.includes("invalid_api_key") || n.includes("invalid api key") ||
-    n.includes("invalid model") || n.includes("context_length_exceeded") ||
-    n.includes("permission_error") || n.includes("authentication_error") ||
-    n.includes("insufficient_quota") || n.includes("quota") && n.includes("exceeded")
+};
+
+const isDefinitiveText = (text) => {
+  const t = normalizeText(text);
+  return (
+    t.includes("invalid api key") ||
+    t.includes("authentication") ||
+    t.includes("unauthorized") ||
+    t.includes("not found") ||
+    t.includes("invalid request")
   );
-}
+};
 
-async function acquireUpstreamSlot(){
-  const max = envInt("UPSTREAM_MAX_CONCURRENCY",1);
-  const minI = envInt("UPSTREAM_MIN_INTERVAL_MS",1500);
-  while (max>0 && bridgeState.active>=max) await sleep(100);
-  if (minI>0){
-    const wait = Math.max(0, bridgeState.lastStart+minI-Date.now());
-    if (wait>0) await sleep(wait);
+// ============================================================
+// 10. UPSTREAM SLOT
+// ============================================================
+let _activeSlots = 0;
+let _lastRequestAt = 0;
+
+const acquireUpstreamSlot = async () => {
+  const maxC = config.concurrency.maxConcurrency || 1;
+  const minInterval = config.concurrency.minIntervalMs || 1500;
+  while (_activeSlots >= maxC) {
+    await sleep(100);
   }
-  bridgeState.active++;
-  bridgeState.lastStart = Date.now();
-}
-function releaseUpstreamSlot(){ bridgeState.active = Math.max(0,bridgeState.active-1); }
+  const now = Date.now();
+  const wait = minInterval - (now - _lastRequestAt);
+  if (wait > 0) await sleep(wait);
+  _activeSlots++;
+  _lastRequestAt = Date.now();
+};
 
-async function fetchWithTimeout(url, options, timeoutMs){
-  if (!timeoutMs) return fetch(url, options);
-  const c = new AbortController();
-  const t = setTimeout(()=>c.abort(), timeoutMs);
-  try { return await fetch(url, { ...options, signal: c.signal }); }
-  finally { clearTimeout(t); }
-}
+const releaseUpstreamSlot = () => {
+  _activeSlots = Math.max(0, _activeSlots - 1);
+};
 
-async function fetchUpstream(url, options = {}, _reqCtx = {}){
-  const circuitFailures = envInt("UPSTREAM_CIRCUIT_FAILURES",3);
-  const circuitCooldownMs = envInt("UPSTREAM_CIRCUIT_COOLDOWN_MS",60000);
-  const inspectOkText = options.bridgeInspectOkText !== false;
-  const fetchOptions = { ...options };
-  delete fetchOptions.bridgeInspectOkText;
-
-  if (circuitFailures>0 && Date.now()<bridgeState.circuitUntil){
-    const wait = bridgeState.circuitUntil - Date.now();
-    console.warn("[bridge-circuit] open, waiting", wait, "ms");
-    await sleep(wait);
-  }
-  await acquireUpstreamSlot();
-
-  const baseDelay = envInt("UPSTREAM_RETRY_BASE_DELAY_MS",1000);
-  const maxDelay  = envInt("UPSTREAM_RETRY_MAX_DELAY_MS",20000);
-  const jitter    = envInt("UPSTREAM_RETRY_JITTER_MS",750);
-  const timeoutMs = envInt("UPSTREAM_TIMEOUT_MS",180000);
-  const infinite  = UPSTREAM_INFINITE_RETRY;
-  const maxAttempts = infinite ? Infinity : Math.max(1, envInt("UPSTREAM_RETRY_ATTEMPTS",5));
-
-  let lastError;
-  let attempt = 0;
-
+const fetchWithTimeout = async (url, options, timeoutMs) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    while (true) {
-      attempt++;
-      if (!infinite && attempt > maxAttempts) break;
-      try {
-        const upstream = await fetchWithTimeout(url, fetchOptions, timeoutMs);
-        const ct = upstream.headers.get("content-type") || "";
-        const isStream = ct.includes("text/event-stream");
-        const inspect = !isStream && (!upstream.ok || inspectOkText);
-        const text = inspect ? await upstream.clone().text().catch(()=> "") : "";
-
-        const definitive = isDefinitiveStatus(upstream.status) || isDefinitiveText(text);
-        const retryable = !definitive && (isRetryableStatus(upstream.status) || isRetryableText(text));
-
-        if (!retryable) {
-          bridgeState.consecutiveFailures = 0;
-          return upstream;
-        }
-
-        lastError = new Error(`Retryable upstream: status=${upstream.status} body=${text.slice(0,300)}`);
-        bridgeState.consecutiveFailures++;
-        metrics.upstreamRetries++;
-
-        if (circuitFailures>0 && bridgeState.consecutiveFailures>=circuitFailures){
-          bridgeState.circuitUntil = Date.now()+circuitCooldownMs;
-          metrics.circuitOpenedCount++;
-          metrics.lastCircuitOpenAt = new Date().toISOString();
-        }
-
-        const j = jitter>0 ? Math.floor(Math.random()*jitter) : 0;
-        const d = Math.min(maxDelay, baseDelay*Math.pow(2, Math.min(attempt-1, 10))) + j;
-        console.warn("[bridge-retry]", attempt, upstream.status, "delay", d, "body:", text.slice(0,140));
-        await sleep(d);
-
-      } catch (err){
-        lastError = err;
-        bridgeState.consecutiveFailures++;
-        metrics.upstreamRetries++;
-        if (circuitFailures>0 && bridgeState.consecutiveFailures>=circuitFailures){
-          bridgeState.circuitUntil = Date.now()+circuitCooldownMs;
-          metrics.circuitOpenedCount++;
-          metrics.lastCircuitOpenAt = new Date().toISOString();
-        }
-        const j = jitter>0 ? Math.floor(Math.random()*jitter) : 0;
-        const d = Math.min(maxDelay, baseDelay*Math.pow(2, Math.min(attempt-1, 10))) + j;
-        console.warn("[bridge-retry net]", attempt, err?.code || err?.name, "delay", d);
-        await sleep(d);
-      }
-    }
-    throw lastError;
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    return res;
   } finally {
-    releaseUpstreamSlot();
+    clearTimeout(timer);
   }
-}
+};
 
-if (!UPSTREAM_API_KEY){ console.error("Missing UPSTREAM_API_KEY"); process.exit(1); }
-if (!PROXY_API_KEY){ console.error("Missing PROXY_API_KEY"); process.exit(1); }
+// ============================================================
+// 11. FETCH UPSTREAM
+// ============================================================
+const fetchUpstream = async (url, options, reqCtx) => {
+  const upstreams = reqCtx.upstreams || [];
+  if (!upstreams.length) throw new Error("No upstreams configured");
 
-function checkAuth(req,res,next){
-  const auth = req.headers.authorization || "";
-  const xKey = req.headers["x-api-key"] || "";
-  if (auth !== `Bearer ${PROXY_API_KEY}` && xKey !== PROXY_API_KEY){
-    return res.status(401).json({ error: { message: "Unauthorized", type:"authentication_error" }});
+  const retryCfg = config.retry;
+  const circuitCfg = config.circuit;
+  const timeoutMs = config.concurrency.timeoutMs || 180000;
+  const infinite = retryCfg.infinite !== false;
+  const maxAttempts = infinite ? Infinity : (retryCfg.attempts || 5);
+
+  let attempt = 0;
+  let upstreamIdx = 0;
+
+  while (attempt < maxAttempts) {
+    const upstream = upstreams[upstreamIdx % upstreams.length];
+    const stat = getUpstreamStat(upstream.id);
+
+    // Circuit breaker check
+    if (bridgeState.circuitUntil > Date.now()) {
+      metrics.circuitOpenedCount++;
+      metrics.lastCircuitOpenAt = new Date().toISOString();
+      pushErrorLog({
+        type: "circuit_open",
+        upstream: upstream.name,
+        upstreamId: upstream.id,
+        message: "Circuit breaker open",
+      });
+      const waitMs = bridgeState.circuitUntil - Date.now();
+      await sleep(Math.min(waitMs, 5000));
+      attempt++;
+      upstreamIdx++;
+      continue;
+    }
+
+    const targetUrl = upstream.baseUrl + url;
+    const headers = {
+      ...(options.headers || {}),
+      "x-api-key": upstream.apiKey,
+      Authorization: `Bearer ${upstream.apiKey}`,
+    };
+
+    stat.requests++;
+    stat.lastUsed = new Date().toISOString();
+
+    try {
+      await acquireUpstreamSlot();
+      let res;
+      try {
+        res = await fetchWithTimeout(targetUrl, { ...options, headers }, timeoutMs);
+      } finally {
+        releaseUpstreamSlot();
+      }
+
+      if (res.ok || isDefinitiveStatus(res.status)) {
+        if (res.ok) {
+          stat.success++;
+          bridgeState.consecutiveFailures = 0;
+        } else {
+          const bodyText = await res.clone().text().catch(() => "");
+          if (isDefinitiveText(bodyText)) {
+            stat.errors++;
+            pushErrorLog({
+              type: "upstream_error",
+              upstream: upstream.name,
+              upstreamId: upstream.id,
+              status: res.status,
+              message: bodyText.slice(0, 300),
+            });
+            return res;
+          }
+        }
+        return res;
+      }
+
+      // Retryable HTTP status
+      const bodyText = await res.clone().text().catch(() => "");
+      stat.errors++;
+      stat.lastError = `HTTP ${res.status}`;
+      stat.lastErrorTs = new Date().toISOString();
+      bridgeState.consecutiveFailures++;
+
+      pushErrorLog({
+        type: "upstream_error",
+        upstream: upstream.name,
+        upstreamId: upstream.id,
+        status: res.status,
+        message: bodyText.slice(0, 300),
+      });
+
+      if (bridgeState.consecutiveFailures >= (circuitCfg.failures || 3)) {
+        bridgeState.circuitUntil = Date.now() + (circuitCfg.cooldownMs || 60000);
+        metrics.circuitOpenedCount++;
+        metrics.lastCircuitOpenAt = new Date().toISOString();
+      }
+
+      metrics.upstreamRetries++;
+      attempt++;
+      upstreamIdx++;
+
+      const delay = Math.min(
+        (retryCfg.baseDelayMs || 1000) * Math.pow(2, attempt - 1) +
+          Math.random() * (retryCfg.jitterMs || 750),
+        retryCfg.maxDelayMs || 20000
+      );
+      await sleep(delay);
+    } catch (err) {
+      releaseUpstreamSlot();
+      stat.errors++;
+      stat.lastError = err.message;
+      stat.lastErrorTs = new Date().toISOString();
+      bridgeState.consecutiveFailures++;
+
+      const isTimeout = err.name === "AbortError";
+      pushErrorLog({
+        type: isTimeout ? "timeout" : "network_error",
+        upstream: upstream.name,
+        upstreamId: upstream.id,
+        message: err.message,
+      });
+
+      if (bridgeState.consecutiveFailures >= (circuitCfg.failures || 3)) {
+        bridgeState.circuitUntil = Date.now() + (circuitCfg.cooldownMs || 60000);
+        metrics.circuitOpenedCount++;
+        metrics.lastCircuitOpenAt = new Date().toISOString();
+      }
+
+      metrics.upstreamRetries++;
+      attempt++;
+      upstreamIdx++;
+
+      const delay = Math.min(
+        (retryCfg.baseDelayMs || 1000) * Math.pow(2, attempt - 1) +
+          Math.random() * (retryCfg.jitterMs || 750),
+        retryCfg.maxDelayMs || 20000
+      );
+      await sleep(delay);
+    }
+  }
+
+  throw new Error("Max retry attempts reached");
+};
+
+// ============================================================
+// 12. AUTH MIDDLEWARE
+// ============================================================
+const checkAuth = (req, res, next) => {
+  if (!config.proxyApiKey) {
+    return res.status(503).json({ error: { message: "Bridge not configured", type: "not_configured" } });
+  }
+  const auth = req.headers["authorization"] || "";
+  const key = auth.startsWith("Bearer ") ? auth.slice(7) : req.headers["x-api-key"] || "";
+  if (key !== config.proxyApiKey) {
+    return res.status(401).json({ error: { message: "Invalid API key", type: "invalid_request_error" } });
   }
   next();
-}
-function checkDashboardAuth(req,res,next){
-  if ((req.headers.authorization || "") !== `Bearer ${DASHBOARD_PASSWORD}`){
+};
+
+const checkDashboardAuth = (req, res, next) => {
+  const token = req.headers["x-dashboard-token"] || req.headers["authorization"]?.replace("Bearer ", "") || "";
+  if (!config.dashboardPassword || token !== config.dashboardPassword) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   next();
-}
-function instrument(req,res,next){
-  const start = Date.now();
-  const route = req.path.startsWith("/v1/chat/completions") ? "/v1/chat/completions"
-              : req.path.startsWith("/v1/messages") ? "/v1/messages"
-              : req.path.startsWith("/v1/models") ? "/v1/models" : null;
+};
+
+const instrument = (route) => (req, res, next) => {
   metrics.totalRequests++;
+  if (!metrics.byRoute[route]) metrics.byRoute[route] = { requests: 0, success: 0, errors: 0 };
+  metrics.byRoute[route].requests++;
+  const start = Date.now();
   res.on("finish", () => {
-    const ms = Date.now() - start;
-    const ok = res.statusCode >= 200 && res.statusCode < 400;
-    if (ok) metrics.totalSuccess++; else metrics.totalErrors++;
-    if (route && metrics.byRoute[route]){
-      metrics.byRoute[route].count++;
-      metrics.byRoute[route].totalMs += ms;
-      if (ok) metrics.byRoute[route].ok++; else metrics.byRoute[route].err++;
+    const dur = Date.now() - start;
+    if (res.statusCode < 400) {
+      metrics.totalSuccess++;
+      metrics.byRoute[route].success++;
+    } else {
+      metrics.totalErrors++;
+      metrics.byRoute[route].errors++;
     }
-    pushRecent({
-      method: req.method,
-      route: req.path,
-      status: res.statusCode,
-      ms,
-      ok,
-      blocked: res.locals.blocked || null,
-      error_id: res.locals.error_id || null
-    });
+    pushRecent({ route, status: res.statusCode, durationMs: dur });
   });
   next();
-}
+};
 
-app.get("/health", (req,res) => res.json({ ok: true }));
-app.use(express.static(path.join(__dirname,"public")));
+// ============================================================
+// 13. CONVERSION HELPERS
+// ============================================================
+const convertOpenAIContentToAnthropic = (content) => {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((c) => {
+      if (c.type === "text") return { type: "text", text: c.text };
+      if (c.type === "image_url") {
+        const url = c.image_url?.url || "";
+        if (url.startsWith("data:")) {
+          const [meta, data] = url.split(",");
+          const mediaType = meta.replace("data:", "").replace(";base64", "");
+          return { type: "image", source: { type: "base64", media_type: mediaType, data } };
+        }
+        return { type: "image", source: { type: "url", url } };
+      }
+      return c;
+    });
+  }
+  return content;
+};
 
-/* =========================================================
-   /admin/*  protegidas pela DASHBOARD_PASSWORD
-   ========================================================= */
-app.post("/admin/login", express.json(), (req,res) => {
-  const pwd = (req.body || {}).password;
-  if (pwd && pwd === DASHBOARD_PASSWORD) return res.json({ ok:true, token: DASHBOARD_PASSWORD });
-  res.status(401).json({ ok:false, error:"invalid_password" });
+const convertMessages = (messages) => {
+  const result = [];
+  for (const m of messages) {
+    if (m.role === "system") continue;
+    result.push({ role: m.role, content: convertOpenAIContentToAnthropic(m.content) });
+  }
+  return result;
+};
+
+const convertTools = (tools) => {
+  if (!tools) return undefined;
+  return tools.map((t) => {
+    if (t.type === "function") {
+      return {
+        name: t.function.name,
+        description: t.function.description || "",
+        input_schema: t.function.parameters || { type: "object", properties: {} },
+      };
+    }
+    return t;
+  });
+};
+
+const convertOpenAIToAnthropic = (body) => {
+  const messages = body.messages || [];
+  const systemMsg = messages.find((m) => m.role === "system");
+  const system = systemMsg
+    ? typeof systemMsg.content === "string"
+      ? systemMsg.content
+      : flattenMessageText([systemMsg])
+    : undefined;
+  const converted = {
+    model: body.model || config.defaultModel,
+    max_tokens: body.max_tokens || 4096,
+    messages: convertMessages(messages),
+  };
+  if (system) converted.system = system;
+  if (body.temperature !== undefined) converted.temperature = body.temperature;
+  if (body.top_p !== undefined) converted.top_p = body.top_p;
+  if (body.stop) converted.stop_sequences = Array.isArray(body.stop) ? body.stop : [body.stop];
+  if (body.tools) converted.tools = convertTools(body.tools);
+  if (body.stream) converted.stream = body.stream;
+  return converted;
+};
+
+const convertAnthropicToOpenAI = (data, model) => {
+  const content = data.content || [];
+  const textBlock = content.find((c) => c.type === "text");
+  const toolBlock = content.find((c) => c.type === "tool_use");
+  const message = { role: "assistant", content: textBlock ? textBlock.text : null };
+  if (toolBlock) {
+    message.tool_calls = [{
+      id: toolBlock.id || genId(),
+      type: "function",
+      function: { name: toolBlock.name, arguments: JSON.stringify(toolBlock.input || {}) },
+    }];
+  }
+  return {
+    id: data.id || genId(),
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: model || data.model || config.defaultModel,
+    choices: [{ index: 0, message, finish_reason: data.stop_reason || "stop" }],
+    usage: {
+      prompt_tokens: data.usage?.input_tokens || 0,
+      completion_tokens: data.usage?.output_tokens || 0,
+      total_tokens: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0),
+    },
+  };
+};
+
+const sendOpenAIStream = async (upstreamRes, res, model) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const reader = upstreamRes.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (data === "[DONE]") { res.write("data: [DONE]\n\n"); continue; }
+        try {
+          const evt = JSON.parse(data);
+          const chunk = { id: evt.message?.id || genId(), object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model, choices: [] };
+          if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") {
+            chunk.choices = [{ index: 0, delta: { content: evt.delta.text }, finish_reason: null }];
+          } else if (evt.type === "message_delta" && evt.delta?.stop_reason) {
+            chunk.choices = [{ index: 0, delta: {}, finish_reason: evt.delta.stop_reason }];
+          } else { continue; }
+          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        } catch { /* skip */ }
+      }
+    }
+  } finally { reader.releaseLock(); res.end(); }
+};
+
+const sendAnthropicStreamFromMessage = async (data, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  const send = (evt, payload) => res.write(`event: ${evt}\ndata: ${JSON.stringify(payload)}\n\n`);
+  send("message_start", { type: "message_start", message: { id: data.id, type: "message", role: "assistant", content: [], model: data.model, usage: data.usage } });
+  const content = data.content || [];
+  for (let i = 0; i < content.length; i++) {
+    const block = content[i];
+    send("content_block_start", { type: "content_block_start", index: i, content_block: block.type === "text" ? { type: "text", text: "" } : block });
+    if (block.type === "text") {
+      const chunkSize = 20;
+      for (let j = 0; j < block.text.length; j += chunkSize) {
+        send("content_block_delta", { type: "content_block_delta", index: i, delta: { type: "text_delta", text: block.text.slice(j, j + chunkSize) } });
+      }
+    }
+    send("content_block_stop", { type: "content_block_stop", index: i });
+  }
+  send("message_delta", { type: "message_delta", delta: { stop_reason: data.stop_reason || "end_turn", stop_sequence: null }, usage: { output_tokens: data.usage?.output_tokens || 0 } });
+  send("message_stop", { type: "message_stop" });
+  res.end();
+};
+
+const copyAnthropicHeaders = (upstreamRes, res) => {
+  const headers = ["anthropic-ratelimit-requests-limit", "anthropic-ratelimit-requests-remaining",
+    "anthropic-ratelimit-tokens-limit", "anthropic-ratelimit-tokens-remaining", "request-id", "x-request-id"];
+  for (const h of headers) { const v = upstreamRes.headers.get(h); if (v) res.setHeader(h, v); }
+};
+
+const sendUpstreamResponse = async (upstreamRes, res) => {
+  const contentType = upstreamRes.headers.get("content-type") || "text/event-stream";
+  res.setHeader("Content-Type", contentType);
+  const reader = upstreamRes.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      res.write(Buffer.from(value));
+    }
+  } finally { reader.releaseLock(); res.end(); }
+};
+
+// ============================================================
+// 14. ROUTES
+// ============================================================
+
+// GET /health
+app.get("/health", (req, res) => res.json({ ok: true }));
+
+// Static files
+app.use(express.static(path.join(__dirname, "public")));
+
+// POST /admin/login
+app.post("/admin/login", (req, res) => {
+  const { password } = req.body || {};
+  if (!config.dashboardPassword || password !== config.dashboardPassword) {
+    return res.status(401).json({ error: "Invalid password" });
+  }
+  res.json({ token: config.dashboardPassword });
 });
 
-app.get("/admin/status", checkDashboardAuth, (req,res) => {
-  rotateBudgetIfNeeded();
-  const cfg = {
-    upstream_base_url: UPSTREAM_BASE_URL,
-    default_model: DEFAULT_MODEL,
-    port: Number(PORT),
-    upstream_api_key_set: Boolean(UPSTREAM_API_KEY),
-    proxy_api_key_set: Boolean(PROXY_API_KEY),
-    upstream_retry_attempts: envInt("UPSTREAM_RETRY_ATTEMPTS",5),
-    upstream_max_concurrency: envInt("UPSTREAM_MAX_CONCURRENCY",1),
-    upstream_min_interval_ms: envInt("UPSTREAM_MIN_INTERVAL_MS",1500),
-    upstream_timeout_ms: envInt("UPSTREAM_TIMEOUT_MS",180000),
-    upstream_circuit_failures: envInt("UPSTREAM_CIRCUIT_FAILURES",3),
-    upstream_circuit_cooldown_ms: envInt("UPSTREAM_CIRCUIT_COOLDOWN_MS",60000),
-    openclaw_force_non_stream_retry: process.env.OPENCLAW_FORCE_NON_STREAM_RETRY ?? "true",
-    upstream_infinite_retry: UPSTREAM_INFINITE_RETRY,
-    upstream_retry_max_delay_ms: envInt("UPSTREAM_RETRY_MAX_DELAY_MS",20000)
-  };
-  const circuitOpen = Date.now() < bridgeState.circuitUntil;
-  const byRoute = {};
-  for (const [k,v] of Object.entries(metrics.byRoute)){
-    byRoute[k] = { ...v, avgMs: v.count ? Math.round(v.totalMs/v.count) : 0 };
-  }
+// GET /admin/setup-status (no auth)
+app.get("/admin/setup-status", (req, res) => {
   res.json({
-    started_at: new Date(STARTED_AT).toISOString(),
-    uptime_ms: Date.now() - STARTED_AT,
-    state: {
-      active_upstream: bridgeState.active,
-      consecutive_failures: bridgeState.consecutiveFailures,
-      circuit_open: circuitOpen,
-      circuit_remaining_ms: circuitOpen ? bridgeState.circuitUntil - Date.now() : 0
-    },
-    metrics: {
-      total_requests: metrics.totalRequests,
-      total_success: metrics.totalSuccess,
-      total_errors: metrics.totalErrors,
-      upstream_retries: metrics.upstreamRetries,
-      circuit_opened_count: metrics.circuitOpenedCount,
-      last_circuit_open_at: metrics.lastCircuitOpenAt,
-      guardrail_blocks: metrics.guardrailBlocks,
-      by_route: byRoute
-    },
-    guardrails: {
-      pii: {
-        enabled: guardrails.pii.enabled,
-        blocked: guardrails.pii.blocked,
-        last_block_at: guardrails.pii.lastBlockAt
-      },
-      max_tokens: {
-        enabled: guardrails.maxTokens.enabled,
-        limit: guardrails.maxTokens.limit,
-        blocked: guardrails.maxTokens.blocked,
-        last_block_at: guardrails.maxTokens.lastBlockAt
-      },
-      budget: {
-        enabled: guardrails.budget.enabled,
-        daily_usd: guardrails.budget.dailyUsd,
-        today_spent_usd: round4(guardrails.budget.todaySpentUsd),
-        total_spent_usd: round4(guardrails.budget.totalSpentUsd),
-        today_key: guardrails.budget.todayKey,
-        history: guardrails.budget.history,
-        pricing: guardrails.budget.pricing,
-        blocked: guardrails.budget.blocked,
-        last_block_at: guardrails.budget.lastBlockAt
-      },
-      model_swap: {
-        enabled: guardrails.modelSwap.enabled,
-        detected: guardrails.modelSwap.detected,
-        swaps: guardrails.modelSwap.swaps.slice(0, 50)
-      }
-    },
-    recent: metrics.recent,
-    error_log: errorLog.slice(0, 50),
-    config: cfg,
-    versions: { node: process.version, bridge: "1.3.0-infinite-retry" }
+    configured: isConfigured(),
+    upstreamCount: config.upstreams.length,
+    hasProxyKey: !!config.proxyApiKey,
+    hasDashboardPassword: !!config.dashboardPassword,
   });
 });
 
-app.post("/admin/reset", checkDashboardAuth, (req,res) => {
-  metrics.totalRequests = metrics.totalSuccess = metrics.totalErrors = 0;
-  metrics.upstreamRetries = metrics.circuitOpenedCount = 0;
-  metrics.guardrailBlocks = 0;
+// POST /admin/setup (no auth when not configured)
+app.post("/admin/setup", (req, res) => {
+  if (isConfigured()) {
+    const token = req.headers["x-dashboard-token"] || req.headers["authorization"]?.replace("Bearer ", "") || "";
+    if (token !== config.dashboardPassword) {
+      return res.status(401).json({ error: "Already configured. Provide dashboard auth." });
+    }
+  }
+  const { dashboardPassword, proxyApiKey, upstreams } = req.body || {};
+  if (dashboardPassword) config.dashboardPassword = dashboardPassword;
+  if (proxyApiKey) config.proxyApiKey = proxyApiKey;
+  if (Array.isArray(upstreams)) {
+    config.upstreams = upstreams.map((u) => ({
+      id: u.id || genId(),
+      name: u.name || "upstream",
+      baseUrl: (u.baseUrl || "").replace(/\/$/, ""),
+      apiKey: u.apiKey || "",
+      enabled: u.enabled !== false,
+    }));
+  }
+  saveConfig(config);
+  res.json({ ok: true });
+});
+
+// GET /admin/config (dashboard auth)
+app.get("/admin/config", checkDashboardAuth, (req, res) => {
+  const masked = {
+    ...config,
+    proxyApiKey: maskKey(config.proxyApiKey),
+    dashboardPassword: maskKey(config.dashboardPassword),
+    upstreams: config.upstreams.map((u) => ({ ...u, apiKey: maskKey(u.apiKey) })),
+  };
+  res.json(masked);
+});
+
+// POST /admin/config (dashboard auth)
+app.post("/admin/config", checkDashboardAuth, (req, res) => {
+  const body = req.body || {};
+  if (body.upstreams !== undefined) {
+    config.upstreams = body.upstreams.map((u) => {
+      const existing = config.upstreams.find((e) => e.id === u.id);
+      const apiKey = u.apiKey && u.apiKey.includes("...") && existing
+        ? existing.apiKey
+        : (u.apiKey || (existing ? existing.apiKey : ""));
+      return {
+        id: u.id || genId(),
+        name: u.name || "upstream",
+        baseUrl: (u.baseUrl || "").replace(/\/$/, ""),
+        apiKey,
+        enabled: u.enabled !== false,
+      };
+    });
+    delete body.upstreams;
+  }
+  if (body.proxyApiKey && body.proxyApiKey.includes("...")) delete body.proxyApiKey;
+  if (body.dashboardPassword && body.dashboardPassword.includes("...")) delete body.dashboardPassword;
+  config = deepMerge(config, body);
+  saveConfig(config);
+  res.json({ ok: true });
+});
+
+// GET /admin/status (dashboard auth)
+app.get("/admin/status", checkDashboardAuth, (req, res) => {
+  res.json({
+    configured: isConfigured(),
+    startedAt: STARTED_AT,
+    uptime: Math.floor((Date.now() - new Date(STARTED_AT).getTime()) / 1000),
+    upstreams: config.upstreams.map((u) => ({
+      ...u,
+      apiKey: maskKey(u.apiKey),
+      stats: getUpstreamStat(u.id),
+    })),
+    guardrails: {
+      budget: { ...grState.budget },
+    },
+    error_log: errorLog.slice(-50),
+    metrics,
+    config: {
+      ...config,
+      proxyApiKey: maskKey(config.proxyApiKey),
+      dashboardPassword: maskKey(config.dashboardPassword),
+      upstreams: config.upstreams.map((u) => ({ ...u, apiKey: maskKey(u.apiKey) })),
+    },
+    versions: {
+      node: process.version,
+      bridge: "1.4.0-config-ui",
+    },
+  });
+});
+
+// POST /admin/reset (dashboard auth)
+app.post("/admin/reset", checkDashboardAuth, (req, res) => {
+  metrics.totalRequests = 0;
+  metrics.totalSuccess = 0;
+  metrics.totalErrors = 0;
+  metrics.upstreamRetries = 0;
+  metrics.circuitOpenedCount = 0;
   metrics.lastCircuitOpenAt = null;
+  metrics.guardrailBlocks = 0;
+  metrics.byRoute = {};
   metrics.recent = [];
-  for (const r of Object.values(metrics.byRoute)){ r.ok=0; r.err=0; r.totalMs=0; r.count=0; }
   errorLog.length = 0;
   res.json({ ok: true });
 });
 
-app.post("/admin/guardrails", checkDashboardAuth, (req,res) => {
-  const b = req.body || {};
-  if (b.pii && typeof b.pii.enabled === "boolean") guardrails.pii.enabled = b.pii.enabled;
-  if (b.max_tokens){
-    if (typeof b.max_tokens.enabled === "boolean") guardrails.maxTokens.enabled = b.max_tokens.enabled;
-    if (Number.isFinite(Number(b.max_tokens.limit))) guardrails.maxTokens.limit = Number(b.max_tokens.limit);
-  }
-  if (b.budget){
-    if (typeof b.budget.enabled === "boolean") guardrails.budget.enabled = b.budget.enabled;
-    if (Number.isFinite(Number(b.budget.daily_usd))) guardrails.budget.dailyUsd = Number(b.budget.daily_usd);
-    if (b.budget.pricing){
-      if (Number.isFinite(Number(b.budget.pricing.input_per_million)))  guardrails.budget.pricing.inputPerMillion  = Number(b.budget.pricing.input_per_million);
-      if (Number.isFinite(Number(b.budget.pricing.output_per_million))) guardrails.budget.pricing.outputPerMillion = Number(b.budget.pricing.output_per_million);
-    }
-  }
-  if (b.model_swap && typeof b.model_swap.enabled === "boolean") guardrails.modelSwap.enabled = b.model_swap.enabled;
-  res.json({ ok:true });
+// POST /admin/guardrails (dashboard auth)
+app.post("/admin/guardrails", checkDashboardAuth, (req, res) => {
+  config.guardrails = deepMerge(config.guardrails, req.body || {});
+  saveConfig(config);
+  res.json({ ok: true });
 });
 
-app.post("/admin/budget/reset", checkDashboardAuth, (req,res) => {
-  guardrails.budget.todaySpentUsd = 0;
-  guardrails.budget.totalSpentUsd = 0;
-  guardrails.budget.history = [];
-  guardrails.budget.blocked = 0;
-  guardrails.budget.lastBlockAt = null;
-  res.json({ ok:true });
+// POST /admin/budget/reset (dashboard auth)
+app.post("/admin/budget/reset", checkDashboardAuth, (req, res) => {
+  grState.budget.usedUsd = 0;
+  grState.budget.day = dayKey();
+  res.json({ ok: true });
 });
 
-app.post("/admin/swaps/clear", checkDashboardAuth, (req,res) => {
-  guardrails.modelSwap.swaps = [];
-  guardrails.modelSwap.detected = 0;
-  res.json({ ok:true });
+// POST /admin/swaps/clear (dashboard auth)
+app.post("/admin/swaps/clear", checkDashboardAuth, (req, res) => {
+  grState.modelSwap = {};
+  res.json({ ok: true });
 });
 
-app.get("/admin/errors", checkDashboardAuth, (req,res) => {
-  res.json({ errors: errorLog.slice(0, 200) });
+// GET /admin/errors (dashboard auth)
+app.get("/admin/errors", checkDashboardAuth, (req, res) => {
+  res.json(errorLog);
 });
 
-app.delete("/admin/errors", checkDashboardAuth, (req,res) => {
+// DELETE /admin/errors (dashboard auth)
+app.delete("/admin/errors", checkDashboardAuth, (req, res) => {
   errorLog.length = 0;
-  res.json({ ok:true });
+  res.json({ ok: true });
 });
 
-/* =========================================================
-   /v1/* — autenticação proxy + instrumentação
-   ========================================================= */
-app.use("/v1", instrument, checkAuth);
-
-function copyAnthropicHeaders(req){
-  const h = {
-    Authorization: `Bearer ${UPSTREAM_API_KEY}`,
-    "Content-Type": req.headers["content-type"] || "application/json",
-    "anthropic-version": req.headers["anthropic-version"] || "2023-06-01"
-  };
-  if (req.headers["anthropic-beta"]) h["anthropic-beta"] = req.headers["anthropic-beta"];
-  return h;
-}
-
-async function sendUpstreamResponse(upstream, res){
-  res.status(upstream.status);
-  const ct = upstream.headers.get("content-type"); if (ct) res.setHeader("Content-Type", ct);
-  const cc = upstream.headers.get("cache-control"); if (cc) res.setHeader("Cache-Control", cc);
-  if (!upstream.body) return res.end();
-  const reader = upstream.body.getReader();
-  while (true){
-    const { done, value } = await reader.read();
-    if (done) break;
-    res.write(Buffer.from(value));
-  }
-  res.end();
-}
-
-function extractAnthropicText(message){
-  const c = Array.isArray(message?.content) ? message.content : [];
-  return c.map(p => typeof p === "string" ? p : (p?.type === "text" ? p.text : (p?.text || ""))).join("");
-}
-
-function sendAnthropicStreamFromMessage(res, message){
-  const text = extractAnthropicText(message);
-  const id = message?.id || `msg_${Date.now()}`;
-  const model = message?.model || DEFAULT_MODEL;
-  const usage = message?.usage || { input_tokens:0, output_tokens:0 };
-  const stopReason = message?.stop_reason || "end_turn";
-
-  res.status(200);
-  res.setHeader("Content-Type","text/event-stream; charset=utf-8");
-  res.setHeader("Cache-Control","no-cache");
-  res.setHeader("Connection","keep-alive");
-
-  const send = (event, data) => {
-    res.write(`event: ${event}\n`);
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-  };
-  send("message_start", { type:"message_start", message:{ id, type:"message", role:"assistant", model, content:[], stop_reason:null, stop_sequence:null, usage:{ input_tokens: usage.input_tokens||0, output_tokens:0 }}});
-  send("content_block_start", { type:"content_block_start", index:0, content_block:{ type:"text", text:"" }});
-  if (text) send("content_block_delta", { type:"content_block_delta", index:0, delta:{ type:"text_delta", text }});
-  send("content_block_stop", { type:"content_block_stop", index:0 });
-  send("message_delta", { type:"message_delta", delta:{ stop_reason: stopReason, stop_sequence:null }, usage:{ output_tokens: usage.output_tokens || 0 }});
-  send("message_stop", { type:"message_stop" });
-  res.end();
-}
-
-app.get("/v1/models", async (req,res) => {
+// GET /v1/models (proxy auth)
+app.get("/v1/models", instrument("/v1/models"), checkAuth, async (req, res) => {
+  const upstreams = getEnabledUpstreams();
+  if (!upstreams.length) return res.status(503).json({ error: { message: "No upstreams available" } });
   try {
-    const u = await fetchUpstream(`${UPSTREAM_BASE_URL}/v1/models`, { headers: { Authorization: `Bearer ${UPSTREAM_API_KEY}` }});
-    return sendUpstreamResponse(u, res);
-  } catch (e){
-    res.status(500).json({ error:{ message: String(e), type:"bridge_error" }});
+    const upstream = upstreams[0];
+    const response = await fetchWithTimeout(
+      `${upstream.baseUrl}/v1/models`,
+      { headers: { "x-api-key": upstream.apiKey, Authorization: `Bearer ${upstream.apiKey}` } },
+      config.concurrency.timeoutMs || 180000
+    );
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err) {
+    res.status(502).json({ error: { message: err.message } });
   }
 });
 
-/* OpenAI <-> Anthropic conversões */
-function convertOpenAIContentToAnthropic(content){
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) return content.map(p => p.type === "text" ? { type:"text", text: p.text || "" } : null).filter(Boolean);
-  return String(content ?? "");
-}
-function convertMessages(messages = []){
-  const out = []; const sys = [];
-  for (const m of messages){
-    if (m.role === "system"){ if (typeof m.content === "string") sys.push(m.content); continue; }
-    if (m.role === "user"){ out.push({ role:"user", content: convertOpenAIContentToAnthropic(m.content) }); continue; }
-    if (m.role === "assistant"){
-      const c = [];
-      if (m.content) c.push({ type:"text", text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) });
-      if (Array.isArray(m.tool_calls)) for (const call of m.tool_calls) c.push({ type:"tool_use", id: call.id, name: call.function?.name, input: JSON.parse(call.function?.arguments || "{}") });
-      out.push({ role:"assistant", content: c.length ? c : "" });
-      continue;
-    }
-    if (m.role === "tool"){
-      out.push({ role:"user", content: [{ type:"tool_result", tool_use_id: m.tool_call_id, content: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }]});
-    }
+// POST /v1/chat/completions (proxy auth)
+app.post("/v1/chat/completions", instrument("/v1/chat/completions"), checkAuth, async (req, res) => {
+  const guard = preflightGuardrails(req.body, "/v1/chat/completions");
+  if (guard.blocked) {
+    return res.status(guard.status).json({ error: { message: guard.reason, type: "guardrail_block" } });
   }
-  return { system: sys.join("\n\n") || undefined, messages: out };
-}
-function convertTools(tools = []){
-  return tools.filter(t => t.type === "function" && t.function).map(t => ({
-    name: t.function.name, description: t.function.description || "",
-    input_schema: t.function.parameters || { type:"object", properties:{} }
-  }));
-}
-function convertAnthropicToOpenAI(data, model){
-  const txt = []; const tc = [];
-  for (const b of data.content || []){
-    if (b.type === "text") txt.push(b.text || "");
-    if (b.type === "tool_use") tc.push({ id: b.id, type:"function", function:{ name: b.name, arguments: JSON.stringify(b.input || {}) }});
-  }
-  const message = { role:"assistant", content: txt.join("") };
-  if (tc.length) message.tool_calls = tc;
-  return {
-    id: data.id || `chatcmpl_${Date.now()}`, object:"chat.completion",
-    created: Math.floor(Date.now()/1000), model: data.model || model,
-    choices: [{ index:0, message, finish_reason: tc.length ? "tool_calls" : "stop" }],
-    usage: {
-      prompt_tokens: data.usage?.input_tokens || 0,
-      completion_tokens: data.usage?.output_tokens || 0,
-      total_tokens: (data.usage?.input_tokens||0)+(data.usage?.output_tokens||0)
-    }
-  };
-}
-function sendOpenAIStream(res, r){
-  res.setHeader("Content-Type","text/event-stream");
-  res.setHeader("Cache-Control","no-cache");
-  res.setHeader("Connection","keep-alive");
-  const ch = r.choices[0];
-  const head = { id:r.id, object:"chat.completion.chunk", created:r.created, model:r.model, choices:[{ index:0, delta:{ role:"assistant" }, finish_reason:null }]};
-  res.write(`data: ${JSON.stringify(head)}\n\n`);
-  if (ch.message.content){
-    res.write(`data: ${JSON.stringify({ id:r.id, object:"chat.completion.chunk", created:r.created, model:r.model, choices:[{ index:0, delta:{ content: ch.message.content }, finish_reason:null }]})}\n\n`);
-  }
-  if (ch.message.tool_calls?.length){
-    res.write(`data: ${JSON.stringify({ id:r.id, object:"chat.completion.chunk", created:r.created, model:r.model, choices:[{ index:0, delta:{ tool_calls: ch.message.tool_calls.map((c,i)=>({ index:i, id:c.id, type:"function", function:{ name:c.function.name, arguments:c.function.arguments }})) }, finish_reason:null }]})}\n\n`);
-  }
-  res.write(`data: ${JSON.stringify({ id:r.id, object:"chat.completion.chunk", created:r.created, model:r.model, choices:[{ index:0, delta:{}, finish_reason: ch.finish_reason || "stop" }]})}\n\n`);
-  res.write("data: [DONE]\n\n");
-  res.end();
-}
 
-/* OpenAI-compatible */
-app.post("/v1/chat/completions", async (req,res) => {
-  const t0 = Date.now();
-  const upstreamUrl = `${UPSTREAM_BASE_URL}/v1/messages`;
+  const upstreams = getEnabledUpstreams();
+  if (!upstreams.length) return res.status(503).json({ error: { message: "No upstreams available" } });
+
+  const anthropicBody = convertOpenAIToAnthropic(req.body);
+  const isStream = req.body.stream === true;
+
   try {
-    const body = req.body;
-    const model = body.model || DEFAULT_MODEL;
+    const upstreamRes = await fetchUpstream(
+      "/v1/messages",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" },
+        body: JSON.stringify(anthropicBody),
+      },
+      { upstreams, route: "/v1/chat/completions", method: "POST" }
+    );
 
-    const gr = preflightGuardrails(body);
-    if (gr.blocked){
-      metrics.guardrailBlocks++;
-      res.locals.blocked = gr.by;
-      const eid = pushErrorLog({ route:"/v1/chat/completions", method:"POST", status:403, type:"guardrail_block", message:`[guardrail:${gr.by}] ${gr.reason}`, upstream_url:upstreamUrl, duration_ms:Date.now()-t0 });
-      res.locals.error_id = eid;
-      return res.status(403).json({ error:{ message:`[guardrail:${gr.by}] ${gr.reason}`, type:"guardrail_block" }});
+    if (!upstreamRes.ok) {
+      const errBody = await upstreamRes.text().catch(() => "");
+      return res.status(upstreamRes.status).json({ error: { message: errBody } });
     }
 
-    const conv = convertMessages(body.messages || []);
-    const anth = { model, max_tokens: body.max_tokens || body.max_completion_tokens || 4096, messages: conv.messages };
-    if (conv.system) anth.system = conv.system;
-    const tools = convertTools(body.tools || []); if (tools.length) anth.tools = tools;
-    if (body.temperature !== undefined) anth.temperature = body.temperature;
-
-    const retriesBefore = metrics.upstreamRetries;
-    const upstream = await fetchUpstream(upstreamUrl, {
-      method:"POST",
-      headers:{ Authorization:`Bearer ${UPSTREAM_API_KEY}`, "anthropic-version":"2023-06-01", "Content-Type":"application/json" },
-      body: JSON.stringify(anth)
-    });
-    const retriesTaken = metrics.upstreamRetries - retriesBefore;
-    const text = await upstream.text();
-    if (!upstream.ok){
-      const eid = pushErrorLog({ route:"/v1/chat/completions", method:"POST", status:upstream.status, type:"upstream_error", message:`Upstream error ${upstream.status}`, body_snippet:text, retries_taken:retriesTaken, upstream_url:upstreamUrl, duration_ms:Date.now()-t0 });
-      res.locals.error_id = eid;
-      return res.status(upstream.status).type("application/json").send(text);
+    if (isStream) {
+      await sendOpenAIStream(upstreamRes, res, req.body.model || config.defaultModel);
+    } else {
+      const data = await upstreamRes.json();
+      recordUsage(data.usage);
+      res.json(convertAnthropicToOpenAI(data, req.body.model || config.defaultModel));
     }
-
-    const anthResp = JSON.parse(text);
-    recordUsage({ requestedModel: model, returnedModel: anthResp.model, usage: anthResp.usage, route: "/v1/chat/completions" });
-
-    const openai = convertAnthropicToOpenAI(anthResp, model);
-    if (body.stream) return sendOpenAIStream(res, openai);
-    res.json(openai);
-  } catch (e){
-    const eid = pushErrorLog({ route:"/v1/chat/completions", method:"POST", status:500, type: e?.name === "AbortError" ? "timeout" : "network_error", message:String(e), upstream_url:upstreamUrl, duration_ms:Date.now()-t0 });
-    res.locals.error_id = eid;
-    res.status(500).json({ error:{ message:String(e), type:"bridge_error" }});
+  } catch (err) {
+    res.status(502).json({ error: { message: err.message } });
   }
 });
 
-/* Anthropic-compatible (OpenClaw) */
-app.post("/v1/messages", async (req,res) => {
-  const t0 = Date.now();
-  const upstreamUrl = `${UPSTREAM_BASE_URL}/v1/messages`;
+// POST /v1/messages (proxy auth)
+app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res) => {
+  const guard = preflightGuardrails(req.body, "/v1/messages");
+  if (guard.blocked) {
+    return res.status(guard.status).json({ error: { message: guard.reason, type: "guardrail_block" } });
+  }
+  const upstreams = getEnabledUpstreams();
+  if (!upstreams.length) return res.status(503).json({ error: { message: "No upstreams available" } });
+  const isStream = req.body.stream === true;
+  const forceNonStream = config.openclawForceNonStreamRetry === true && isStream;
+  const body = forceNonStream ? { ...req.body, stream: false } : req.body;
   try {
-    const body = req.body || {};
-    const requestedModel = body.model || DEFAULT_MODEL;
-
-    const gr = preflightGuardrails(body);
-    if (gr.blocked){
-      metrics.guardrailBlocks++;
-      res.locals.blocked = gr.by;
-      const eid = pushErrorLog({ route:"/v1/messages", method:"POST", status:403, type:"guardrail_block", message:`[guardrail:${gr.by}] ${gr.reason}`, upstream_url:upstreamUrl, duration_ms:Date.now()-t0 });
-      res.locals.error_id = eid;
-      return res.status(403).json({ error:{ message:`[guardrail:${gr.by}] ${gr.reason}`, type:"guardrail_block" }});
+    const upstreamRes = await fetchUpstream(
+      "/v1/messages",
+      { method: "POST", headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" }, body: JSON.stringify(body) },
+      { upstreams, route: "/v1/messages", method: "POST" }
+    );
+    if (!upstreamRes.ok) {
+      const errBody = await upstreamRes.text().catch(() => "");
+      return res.status(upstreamRes.status).json({ error: { message: errBody } });
     }
-
-    const clientStream = body.stream === true;
-    const force = envBool("OPENCLAW_FORCE_NON_STREAM_RETRY", true);
-    const upstreamBody = { ...body };
-    if (clientStream && force) upstreamBody.stream = false;
-
-    const retriesBefore = metrics.upstreamRetries;
-    const upstream = await fetchUpstream(upstreamUrl, {
-      method:"POST",
-      headers: copyAnthropicHeaders(req),
-      body: JSON.stringify(upstreamBody),
-      bridgeInspectOkText: true
-    });
-    const retriesTaken = metrics.upstreamRetries - retriesBefore;
-
-    if (clientStream && force){
-      const text = await upstream.text();
-      if (!upstream.ok){
-        const eid = pushErrorLog({ route:"/v1/messages", method:"POST", status:upstream.status, type:"upstream_error", message:`Upstream error ${upstream.status}`, body_snippet:text, retries_taken:retriesTaken, upstream_url:upstreamUrl, duration_ms:Date.now()-t0 });
-        res.locals.error_id = eid;
-        return res.status(upstream.status).type("application/json").send(text);
-      }
-      const message = JSON.parse(text);
-      recordUsage({ requestedModel, returnedModel: message.model, usage: message.usage, route: "/v1/messages" });
-      return sendAnthropicStreamFromMessage(res, message);
+    if (isStream && !forceNonStream) {
+      copyAnthropicHeaders(upstreamRes, res);
+      await sendUpstreamResponse(upstreamRes, res);
+    } else if (forceNonStream && isStream) {
+      const data = await upstreamRes.json();
+      recordUsage(data.usage);
+      await sendAnthropicStreamFromMessage(data, res);
+    } else {
+      const data = await upstreamRes.json();
+      recordUsage(data.usage);
+      copyAnthropicHeaders(upstreamRes, res);
+      res.json(data);
     }
-
-    // se não força non-stream e a resposta não é stream, ainda tentamos auditar
-    const ct = upstream.headers.get("content-type") || "";
-    if (!ct.includes("text/event-stream") && upstream.ok){
-      const txt = await upstream.text();
-      try {
-        const m = JSON.parse(txt);
-        recordUsage({ requestedModel, returnedModel: m.model, usage: m.usage, route: "/v1/messages" });
-      } catch (_) {}
-      res.status(upstream.status); if (ct) res.setHeader("Content-Type", ct);
-      return res.send(txt);
-    }
-    return sendUpstreamResponse(upstream, res);
-  } catch (e){
-    const eid = pushErrorLog({ route:"/v1/messages", method:"POST", status:500, type: e?.name === "AbortError" ? "timeout" : "network_error", message:String(e), upstream_url:upstreamUrl, duration_ms:Date.now()-t0 });
-    res.locals.error_id = eid;
-    res.status(500).json({ error:{ message:String(e), type:"bridge_error" }});
+  } catch (err) {
+    res.status(502).json({ error: { message: err.message } });
   }
 });
 
+// ============================================================
+// 15. START SERVER
+// ============================================================
 app.listen(PORT, () => {
-  console.log(`Claude bridge v1.3.0-infinite-retry running on port ${PORT}`);
-  console.log(`Infinite retry mode: ${UPSTREAM_INFINITE_RETRY}`);
-  console.log("Dashboard:                 GET  /");
-  console.log("OpenAI-compatible route:   POST /v1/chat/completions");
-  console.log("Anthropic-compatible route:POST /v1/messages");
+  console.log(`Claude Bridge v1.4.0-config-ui listening on port ${PORT}`);
+  console.log(`Config path: ${CONFIG_PATH}`);
+  console.log(`Configured: ${isConfigured()}`);
 });

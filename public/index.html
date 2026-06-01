@@ -8,60 +8,73 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E"/>
 </head>
 <body>
+  <!-- SETUP -->
+  <section id="setup" class="login-wrap hidden">
+    <div class="login-card" style="max-width:480px">
+      <h1>&#9889; Claude Bridge &mdash; Configura&#231;&#227;o inicial</h1>
+      <p class="muted">Configure o bridge pela primeira vez.</p>
+      <div id="setupStep1">
+        <h4>Passo 1 &mdash; Credenciais</h4>
+        <label>Senha do painel</label>
+        <input id="setupDashPass" type="password" placeholder="Senha para acessar este dashboard" />
+        <label>PROXY_API_KEY (chave que os clientes usar&#227;o)</label>
+        <input id="setupProxyKey" type="text" placeholder="ex: sk-bridge-..." />
+        <button id="setupNext1Btn">Pr&#243;ximo &#8594;</button>
+      </div>
+      <div id="setupStep2" class="hidden">
+        <h4>Passo 2 &mdash; Upstream</h4>
+        <label>Nome do upstream</label>
+        <input id="setupUpName" type="text" value="Nuoda" />
+        <label>Base URL</label>
+        <input id="setupUpUrl" type="text" value="https://api.nuoda.vip" />
+        <label>API Key</label>
+        <input id="setupUpKey" type="password" placeholder="sk-..." />
+        <button id="setupBackBtn">&#8592; Voltar</button>
+        <button id="setupFinishBtn">Salvar e iniciar</button>
+      </div>
+      <div id="setupError" class="error hidden"></div>
+    </div>
+  </section>
+
   <!-- LOGIN -->
-  <section id="login" class="login-wrap">
+  <section id="login" class="login-wrap hidden">
     <div class="login-card">
       <h1>&#9889; Claude Bridge</h1>
-      <p class="muted">Painel de administração</p>
+      <p class="muted">Painel de administra&#231;&#227;o</p>
       <form id="loginForm">
         <label>Senha do dashboard</label>
         <input id="password" type="password" autocomplete="current-password" placeholder="DASHBOARD_PASSWORD" required />
         <button type="submit">Entrar</button>
         <div id="loginError" class="error hidden"></div>
       </form>
-      <p class="muted small">Use <code>DASHBOARD_PASSWORD</code> ou, se não definida, a sua <code>PROXY_API_KEY</code>.</p>
     </div>
   </section>
 
   <!-- DASHBOARD -->
   <main id="app" class="hidden">
     <header class="topbar">
-      <div class="brand">
-        <span class="logo">&#9889;</span>
-        <div>
-          <h1>Claude Bridge</h1>
-          <span id="statusPill" class="pill pill-ok">online</span>
-        </div>
-      </div>
+      <div class="brand"><span class="logo">&#9889;</span><div><h1>Claude Bridge</h1><span id="statusPill" class="pill pill-ok">online</span></div></div>
       <div class="actions">
         <span id="uptime" class="muted">uptime —</span>
-        <button id="refreshBtn" title="Atualizar agora">&#8635; Atualizar</button>
-        <button id="resetBtn" class="danger" title="Zerar métricas">Zerar métricas</button>
+        <button id="refreshBtn">&#8635; Atualizar</button>
+        <button id="resetBtn" class="danger">Zerar m&#233;tricas</button>
         <button id="logoutBtn" class="ghost">Sair</button>
       </div>
     </header>
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="tabMain">Vis&#227;o Geral</button>
+      <button class="tab-btn" data-tab="tabSettings">&#9881; Configura&#231;&#245;es</button>
+    </nav>
 
-    <!-- KPIs -->
+    <!-- ============ TAB: MAIN ============ -->
+    <div id="tabMain">
     <section class="grid grid-4">
-      <div class="card kpi">
-        <span class="kpi-label">Total requisições</span>
-        <span id="kpiTotal" class="kpi-value">0</span>
-      </div>
-      <div class="card kpi">
-        <span class="kpi-label">Sucesso</span>
-        <span id="kpiOk" class="kpi-value good">0</span>
-      </div>
-      <div class="card kpi">
-        <span class="kpi-label">Erros</span>
-        <span id="kpiErr" class="kpi-value bad">0</span>
-      </div>
-      <div class="card kpi">
-        <span class="kpi-label">Retries upstream</span>
-        <span id="kpiRetries" class="kpi-value warn">0</span>
-      </div>
+      <div class="card kpi"><span class="kpi-label">Total requisi&#231;&#245;es</span><span id="kpiTotal" class="kpi-value">0</span></div>
+      <div class="card kpi"><span class="kpi-label">Sucesso</span><span id="kpiOk" class="kpi-value good">0</span></div>
+      <div class="card kpi"><span class="kpi-label">Erros</span><span id="kpiErr" class="kpi-value bad">0</span></div>
+      <div class="card kpi"><span class="kpi-label">Retries upstream</span><span id="kpiRetries" class="kpi-value warn">0</span></div>
     </section>
 
-    <!-- ROW 1: Estado, Latência, Ambiente -->
     <section class="grid grid-3">
       <div class="card">
         <h3>Estado do upstream</h3>
@@ -71,192 +84,70 @@
         <div class="row"><span>Cooldown restante</span><b id="stCooldown">0 ms</b></div>
         <div class="row"><span>Aberturas (total)</span><b id="stOpens">0</b></div>
       </div>
-
       <div class="card">
-        <h3>Latência por rota</h3>
-        <table class="mini">
-          <thead><tr><th>Rota</th><th>Reqs</th><th>OK</th><th>Erros</th><th>Média</th></tr></thead>
-          <tbody id="routeTable"></tbody>
-        </table>
+        <h3>Lat&#234;ncia por rota</h3>
+        <table class="mini"><thead><tr><th>Rota</th><th>Reqs</th><th>OK</th><th>Erros</th><th>M&#233;dia</th></tr></thead><tbody id="routeTable"></tbody></table>
       </div>
-
       <div class="card">
         <h3>Ambiente</h3>
         <div class="row"><span>Upstream</span><b id="cfgUpstream" style="font-size:11px;word-break:break-all">—</b></div>
-        <div class="row"><span>Modelo padrão</span><b id="cfgModel">—</b></div>
+        <div class="row"><span>Modelo padr&#227;o</span><b id="cfgModel">—</b></div>
         <div class="row"><span>Concurrency</span><b id="cfgConc">—</b></div>
         <div class="row"><span>Min interval</span><b id="cfgMin">—</b></div>
-        <div class="row"><span>Timeout</span><b id="cfgTimeout">—</b></div>
+        <div class="row"><span>Timeout</span><b id="cfgTimeout2">—</b></div>
         <div class="row"><span>Retry mode</span><b id="cfgRetryMode">—</b></div>
         <div class="row"><span>OpenClaw non-stream</span><b id="cfgOpenClaw">—</b></div>
-        <div class="row"><span>Versão Node</span><b id="cfgNode">—</b></div>
+        <div class="row"><span>Vers&#227;o Node</span><b id="cfgNode">—</b></div>
       </div>
     </section>
-
-    <!-- ROW 2: Error Log (full width) -->
     <section class="grid">
       <div class="card">
-        <div class="card-header-row">
-          <h3>Error Log <span id="errorLogCount" class="muted small"></span></h3>
-          <button id="clearErrorsBtn" class="btn-sm danger">Limpar</button>
-        </div>
+        <div class="card-header-row"><h3>Error Log <span id="errorLogCount" class="muted small"></span></h3><button id="clearErrorsBtn" class="btn-sm danger">Limpar</button></div>
         <div class="table-scroll">
-          <table class="mini error-log-table">
-            <thead>
-              <tr>
-                <th>Hora</th>
-                <th>Rota</th>
-                <th>Tipo</th>
-                <th>Status</th>
-                <th>Mensagem</th>
-                <th>Retries</th>
-                <th>Duração</th>
-              </tr>
-            </thead>
-            <tbody id="errorLogTable"></tbody>
-          </table>
+          <table class="mini error-log-table"><thead><tr><th>Hora</th><th>Rota</th><th>Tipo</th><th>Status</th><th>Mensagem</th><th>Retries</th><th>Dura&#231;&#227;o</th></tr></thead><tbody id="errorLogTable"></tbody></table>
         </div>
         <p id="errorLogEmpty" class="muted small center" style="padding:12px 0">Nenhum erro registrado.</p>
       </div>
     </section>
 
-    <!-- ROW 3: Guardrails, Budget, Model Swaps -->
     <section class="grid grid-3">
-      <!-- Guardrails -->
       <div class="card">
         <h3>Guardrails</h3>
-
-        <div class="guardrail-item">
-          <div class="guardrail-header">
-            <label class="toggle-wrap">
-              <input type="checkbox" id="grPiiEnabled" class="toggle-input" />
-              <span class="toggle-pill"></span>
-            </label>
-            <span class="guardrail-name">PII (CPF, email, cartão, tel)</span>
-            <span id="grPiiBlocked" class="pill pill-bad" style="margin-left:auto">0</span>
-          </div>
-          <div class="guardrail-meta muted small" id="grPiiLast">—</div>
-        </div>
-
-        <div class="guardrail-item">
-          <div class="guardrail-header">
-            <label class="toggle-wrap">
-              <input type="checkbox" id="grMaxTokensEnabled" class="toggle-input" />
-              <span class="toggle-pill"></span>
-            </label>
-            <span class="guardrail-name">Max tokens</span>
-            <span id="grMaxTokensBlocked" class="pill pill-bad" style="margin-left:auto">0</span>
-          </div>
-          <div class="guardrail-threshold">
-            <label class="muted small">Limite:</label>
-            <input type="number" id="grMaxTokensLimit" class="threshold-input" value="8192" min="1" />
-            <button class="btn-sm" id="grMaxTokensSave">Salvar</button>
-          </div>
-          <div class="guardrail-meta muted small" id="grMaxTokensLast">—</div>
-        </div>
-
-        <div class="guardrail-item">
-          <div class="guardrail-header">
-            <label class="toggle-wrap">
-              <input type="checkbox" id="grBudgetEnabled" class="toggle-input" />
-              <span class="toggle-pill"></span>
-            </label>
-            <span class="guardrail-name">Budget diário</span>
-            <span id="grBudgetBlocked" class="pill pill-bad" style="margin-left:auto">0</span>
-          </div>
-          <div class="guardrail-meta muted small" id="grBudgetLast">—</div>
-        </div>
-
-        <div class="guardrail-item">
-          <div class="guardrail-header">
-            <label class="toggle-wrap">
-              <input type="checkbox" id="grModelSwapEnabled" class="toggle-input" />
-              <span class="toggle-pill"></span>
-            </label>
-            <span class="guardrail-name">Model swap detection</span>
-            <span id="grModelSwapDetected" class="pill pill-warn" style="margin-left:auto">0</span>
-          </div>
-          <div class="guardrail-meta muted small" id="grModelSwapLast">—</div>
-        </div>
+        <div class="guardrail-item"><div class="guardrail-header"><label class="toggle-wrap"><input type="checkbox" id="grPiiEnabled" class="toggle-input" /><span class="toggle-pill"></span></label><span class="guardrail-name">PII (CPF, email, cart&#227;o, tel)</span><span id="grPiiBlocked" class="pill pill-bad" style="margin-left:auto">0</span></div><div class="guardrail-meta muted small" id="grPiiLast">—</div></div>
+        <div class="guardrail-item"><div class="guardrail-header"><label class="toggle-wrap"><input type="checkbox" id="grMaxTokensEnabled" class="toggle-input" /><span class="toggle-pill"></span></label><span class="guardrail-name">Max tokens</span><span id="grMaxTokensBlocked" class="pill pill-bad" style="margin-left:auto">0</span></div><div class="guardrail-threshold"><label class="muted small">Limite:</label><input type="number" id="grMaxTokensLimit" class="threshold-input" value="8192" min="1" /><button class="btn-sm" id="grMaxTokensSave">Salvar</button></div><div class="guardrail-meta muted small" id="grMaxTokensLast">—</div></div>
+        <div class="guardrail-item"><div class="guardrail-header"><label class="toggle-wrap"><input type="checkbox" id="grBudgetEnabled" class="toggle-input" /><span class="toggle-pill"></span></label><span class="guardrail-name">Budget di&#225;rio</span><span id="grBudgetBlocked" class="pill pill-bad" style="margin-left:auto">0</span></div><div class="guardrail-meta muted small" id="grBudgetLast">—</div></div>
+        <div class="guardrail-item"><div class="guardrail-header"><label class="toggle-wrap"><input type="checkbox" id="grModelSwapEnabled" class="toggle-input" /><span class="toggle-pill"></span></label><span class="guardrail-name">Model swap detection</span><span id="grModelSwapDetected" class="pill pill-warn" style="margin-left:auto">0</span></div><div class="guardrail-meta muted small" id="grModelSwapLast">—</div></div>
       </div>
-
-      <!-- Budget -->
       <div class="card">
-        <div class="card-header-row">
-          <h3>Budget</h3>
-          <button id="resetBudgetBtn" class="btn-sm danger">Resetar</button>
-        </div>
-        <div class="budget-gauge-wrap">
-          <div class="budget-gauge-bar">
-            <div id="budgetGaugeFill" class="budget-gauge-fill" style="width:0%"></div>
-          </div>
-          <span id="budgetGaugePct" class="budget-gauge-pct muted small">0%</span>
-        </div>
+        <div class="card-header-row"><h3>Budget</h3><button id="resetBudgetBtn" class="btn-sm danger">Resetar</button></div>
+        <div class="budget-gauge-wrap"><div class="budget-gauge-bar"><div id="budgetGaugeFill" class="budget-gauge-fill" style="width:0%"></div></div><span id="budgetGaugePct" class="budget-gauge-pct muted small">0%</span></div>
         <div class="row"><span>Hoje gasto</span><b id="budgetToday">$0.0000</b></div>
         <div class="row"><span>Total gasto</span><b id="budgetTotal">$0.0000</b></div>
-        <div class="row">
-          <span>Cap diário (USD)</span>
-          <input type="number" id="budgetDailyCap" class="threshold-input" value="10" min="0.01" step="0.01" style="width:80px" />
-        </div>
-        <h3 style="margin-top:14px">Últimos 7 dias</h3>
-        <table class="mini">
-          <thead><tr><th>Dia</th><th>Gasto (USD)</th></tr></thead>
-          <tbody id="budgetHistoryTable"></tbody>
-        </table>
+        <div class="row"><span>Cap di&#225;rio (USD)</span><input type="number" id="budgetDailyCap" class="threshold-input" value="10" min="0.01" step="0.01" style="width:80px" /></div>
+        <h3 style="margin-top:14px">&#218;ltimos 7 dias</h3>
+        <table class="mini"><thead><tr><th>Dia</th><th>Gasto (USD)</th></tr></thead><tbody id="budgetHistoryTable"></tbody></table>
       </div>
-
-      <!-- Model Swap Audit -->
       <div class="card">
-        <div class="card-header-row">
-          <h3>Model Swap Audit <span id="swapTotal" class="muted small"></span></h3>
-          <button id="clearSwapsBtn" class="btn-sm danger">Limpar</button>
-        </div>
-        <div class="table-scroll">
-          <table class="mini">
-            <thead><tr><th>Hora</th><th>Rota</th><th>Solicitado</th><th>Retornado</th></tr></thead>
-            <tbody id="swapTable"></tbody>
-          </table>
-        </div>
+        <div class="card-header-row"><h3>Model Swap Audit <span id="swapTotal" class="muted small"></span></h3><button id="clearSwapsBtn" class="btn-sm danger">Limpar</button></div>
+        <div class="table-scroll"><table class="mini"><thead><tr><th>Hora</th><th>Rota</th><th>Solicitado</th><th>Retornado</th></tr></thead><tbody id="swapTable"></tbody></table></div>
         <p id="swapEmpty" class="muted small center" style="padding:12px 0">Nenhum swap detectado.</p>
       </div>
     </section>
-
-    <!-- ROW 4: Testador + Atividade recente -->
     <section class="grid grid-2">
       <div class="card">
         <h3>Testar rota</h3>
-        <div class="form-row">
-          <label>Endpoint</label>
-          <select id="testEndpoint">
-            <option value="/v1/chat/completions">/v1/chat/completions (n8n / OpenAI)</option>
-            <option value="/v1/messages">/v1/messages (OpenClaw / Anthropic)</option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label>Modelo</label>
-          <input id="testModel" value="claude-opus-4-7" />
-        </div>
-        <div class="form-row">
-          <label>Mensagem</label>
-          <textarea id="testPrompt" rows="3">Responda apenas: ok</textarea>
-        </div>
-        <div class="form-row inline">
-          <label><input type="checkbox" id="testStream" /> stream</label>
-          <button id="testRunBtn">Enviar teste</button>
-        </div>
+        <div class="form-row"><label>Endpoint</label><select id="testEndpoint"><option value="/v1/chat/completions">/v1/chat/completions (n8n / OpenAI)</option><option value="/v1/messages">/v1/messages (OpenClaw / Anthropic)</option></select></div>
+        <div class="form-row"><label>Modelo</label><input id="testModel" value="claude-opus-4-7" /></div>
+        <div class="form-row"><label>Mensagem</label><textarea id="testPrompt" rows="3">Responda apenas: ok</textarea></div>
+        <div class="form-row inline"><label><input type="checkbox" id="testStream" /> stream</label><button id="testRunBtn">Enviar teste</button></div>
         <pre id="testOut" class="output">—</pre>
       </div>
-
       <div class="card">
         <h3>Atividade recente</h3>
-        <table class="mini sticky">
-          <thead><tr><th>Hora</th><th>Método</th><th>Rota</th><th>Status</th><th>Latência</th><th></th></tr></thead>
-          <tbody id="recentTable"></tbody>
-        </table>
+        <table class="mini sticky"><thead><tr><th>Hora</th><th>M&#233;todo</th><th>Rota</th><th>Status</th><th>Lat&#234;ncia</th><th></th></tr></thead><tbody id="recentTable"></tbody></table>
       </div>
     </section>
 
-    <!-- ROW 5: Integrações -->
     <section class="grid grid-2">
       <div class="card">
         <h3>Como usar no n8n</h3>
@@ -273,30 +164,63 @@ Node OpenAI Chat Model:
   "baseUrl": "https://&lt;seu-host&gt;",
   "apiKey":  "[PROXY_API_KEY]",
   "api":     "anthropic-messages",
-  "models": [{
-    "id": "claude-opus-4-7",
-    "name": "Claude Opus 4.7",
-    "reasoning": true,
-    "input": ["text","image"],
-    "contextWindow": 200000,
-    "maxTokens": 8192
-  }]
+  "models": [{"id":"claude-opus-4-7","name":"Claude Opus 4.7","reasoning":true,"input":["text","image"],"contextWindow":200000,"maxTokens":8192}]
 }' --strict-json --replace</pre>
       </div>
     </section>
 
-    <footer class="muted small center">
-      Claude Bridge v1.3.0-infinite-retry · OpenAI &#8644; Anthropic · retry infinito, circuit breaker, guardrails e dashboard
-    </footer>
+    <footer class="muted small center">Claude Bridge v1.3.0-infinite-retry · OpenAI &#8644; Anthropic · retry infinito, circuit breaker, guardrails e dashboard</footer>
+    </div><!-- /tabMain -->
+    <!-- ============ TAB: SETTINGS ============ -->
+    <div id="tabSettings" class="hidden">
+    <section class="grid">
+      <div class="card">
+        <div class="card-header-row"><h3>Upstreams (APIs)</h3><button id="addUpstreamBtn" class="btn-sm">+ Adicionar</button></div>
+        <p class="muted small">Configure um ou mais provedores. O bridge tenta em ordem; se um falhar, vai para o pr&#243;ximo.</p>
+        <div id="upstreamsList"></div>
+        <div id="upstreamForm" class="upstream-form hidden">
+          <h4 id="ufTitle">Novo upstream</h4>
+          <input type="hidden" id="ufId" value="" />
+          <div class="form-row"><label>Nome</label><input type="text" id="ufName" placeholder="ex: Nuoda Principal" /></div>
+          <div class="form-row"><label>Base URL</label><input type="text" id="ufUrl" placeholder="https://api.nuoda.vip" /></div>
+          <div class="form-row"><label>API Key</label><input type="password" id="ufKey" placeholder="sk-..." /></div>
+          <div class="form-row inline">
+            <label><input type="checkbox" id="ufEnabled" checked /> Ativo</label>
+            <button id="ufSaveBtn" class="btn-sm">Salvar</button>
+            <button id="ufCancelBtn" class="btn-sm ghost">Cancelar</button>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="grid grid-2">
+      <div class="card">
+        <h3>Bridge</h3>
+        <div class="form-row"><label>PROXY_API_KEY</label><input type="password" id="cfgProxyKey" /></div>
+        <div class="form-row"><label>Modelo padr&#227;o</label><input type="text" id="cfgDefaultModel" /></div>
+        <div class="form-row"><label>Retry infinito</label><label class="toggle-wrap"><input type="checkbox" id="cfgInfiniteRetry" class="toggle-input" /><span class="toggle-pill"></span></label></div>
+        <div class="form-row"><label>Max delay (ms)</label><input type="number" id="cfgMaxDelay" /></div>
+        <div class="form-row"><label>Max concurrency</label><input type="number" id="cfgMaxConc" /></div>
+        <div class="form-row"><label>Min interval (ms)</label><input type="number" id="cfgMinInterval" /></div>
+        <div class="form-row"><label>Timeout (ms)</label><input type="number" id="cfgTimeout" /></div>
+        <div class="form-row"><label>Circuit failures</label><input type="number" id="cfgCircuitFail" /></div>
+        <div class="form-row"><label>Circuit cooldown (ms)</label><input type="number" id="cfgCircuitCool" /></div>
+        <button id="saveBridgeCfgBtn">Salvar</button>
+        <span id="bridgeCfgMsg" class="muted small"></span>
+      </div>
+      <div class="card">
+        <h3>Senha do painel</h3>
+        <div class="form-row"><label>Nova senha</label><input type="password" id="cfgNewPass" placeholder="deixe vazio para n&#227;o alterar" /></div>
+        <button id="savePassBtn">Alterar senha</button>
+        <span id="passCfgMsg" class="muted small"></span>
+      </div>
+    </section>
+    </div><!-- /tabSettings -->
   </main>
 
   <!-- ERROR DETAIL MODAL -->
   <div id="errorModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="Detalhe do erro">
     <div class="modal-card">
-      <div class="modal-header">
-        <h2>Detalhe do Erro</h2>
-        <button id="modalCloseBtn" class="modal-close" aria-label="Fechar">&times;</button>
-      </div>
+      <div class="modal-header"><h2>Detalhe do Erro</h2><button id="modalCloseBtn" class="modal-close" aria-label="Fechar">&times;</button></div>
       <div id="modalBody" class="modal-body"></div>
     </div>
   </div>
