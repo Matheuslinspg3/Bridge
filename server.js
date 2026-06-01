@@ -31,8 +31,10 @@ const maskKey = (key) => {
 // 3. CONFIG PERSISTENCE
 // ============================================================
 const CONFIG_PATH = (() => {
+  // Prefere /app (volume persistente no Docker).
+  // Verifica se o DIRETÓRIO é gravável, não o arquivo (que pode não existir ainda).
   try {
-    fs.accessSync("/app/config.json", fs.constants.W_OK);
+    fs.accessSync("/app", fs.constants.W_OK);
     return "/app/config.json";
   } catch {
     return path.join(__dirname, "config.json");
@@ -482,12 +484,15 @@ const fetchUpstream = async (url, options, reqCtx) => {
 // 12. AUTH MIDDLEWARE
 // ============================================================
 const checkAuth = (req, res, next) => {
+  // Se proxyApiKey não foi configurada ainda, bloqueia com 503
   if (!config.proxyApiKey) {
-    return res.status(503).json({ error: { message: "Bridge not configured", type: "not_configured" } });
+    return res.status(503).json({ error: { message: "Bridge not configured — set PROXY_API_KEY in the dashboard", type: "not_configured" } });
   }
   const auth = req.headers["authorization"] || "";
-  const key = auth.startsWith("Bearer ") ? auth.slice(7) : req.headers["x-api-key"] || "";
-  if (key !== config.proxyApiKey) {
+  const key = (auth.startsWith("Bearer ") ? auth.slice(7) : req.headers["x-api-key"] || "").trim();
+  const expected = config.proxyApiKey.trim();
+  if (key !== expected) {
+    console.warn(`[auth] 401 — received "${key.slice(0, 12)}..." expected "${expected.slice(0, 12)}..." (len recv=${key.length} exp=${expected.length})`);
     return res.status(401).json({ error: { message: "Invalid API key", type: "invalid_request_error" } });
   }
   next();
