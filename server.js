@@ -388,10 +388,11 @@ const fetchUpstream = async (url, options, reqCtx) => {
     }
 
     const targetUrl = upstream.baseUrl + url;
+    const apiKey = (upstream.apiKey || "").trim();
     const headers = {
       ...(options.headers || {}),
-      "x-api-key": upstream.apiKey,
-      Authorization: `Bearer ${upstream.apiKey}`,
+      "x-api-key": apiKey,
+      Authorization: `Bearer ${apiKey}`,
     };
 
     stat.requests++;
@@ -744,14 +745,14 @@ app.post("/admin/setup", (req, res) => {
     }
   }
   const { dashboardPassword, proxyApiKey, upstreams } = req.body || {};
-  if (dashboardPassword) config.dashboardPassword = dashboardPassword;
-  if (proxyApiKey) config.proxyApiKey = proxyApiKey;
+  if (dashboardPassword) config.dashboardPassword = String(dashboardPassword).trim();
+  if (proxyApiKey) config.proxyApiKey = String(proxyApiKey).trim();
   if (Array.isArray(upstreams)) {
     config.upstreams = upstreams.map((u) => ({
       id: u.id || genId(),
-      name: u.name || "upstream",
-      baseUrl: (u.baseUrl || "").replace(/\/$/, ""),
-      apiKey: u.apiKey || "",
+      name: String(u.name || "upstream").trim(),
+      baseUrl: String(u.baseUrl || "").replace(/\/$/, "").trim(),
+      apiKey: String(u.apiKey || "").trim(),
       enabled: u.enabled !== false,
     }));
   }
@@ -778,11 +779,11 @@ app.post("/admin/config", checkDashboardAuth, (req, res) => {
       const existing = config.upstreams.find((e) => e.id === u.id);
       const apiKey = u.apiKey && u.apiKey.includes("...") && existing
         ? existing.apiKey
-        : (u.apiKey || (existing ? existing.apiKey : ""));
+        : String(u.apiKey || (existing ? existing.apiKey : "")).trim();
       return {
         id: u.id || genId(),
-        name: u.name || "upstream",
-        baseUrl: (u.baseUrl || "").replace(/\/$/, ""),
+        name: String(u.name || "upstream").trim(),
+        baseUrl: String(u.baseUrl || "").replace(/\/$/, "").trim(),
         apiKey,
         enabled: u.enabled !== false,
       };
@@ -791,6 +792,8 @@ app.post("/admin/config", checkDashboardAuth, (req, res) => {
   }
   if (body.proxyApiKey && body.proxyApiKey.includes("...")) delete body.proxyApiKey;
   if (body.dashboardPassword && body.dashboardPassword.includes("...")) delete body.dashboardPassword;
+  if (body.proxyApiKey) body.proxyApiKey = String(body.proxyApiKey).trim();
+  if (body.dashboardPassword) body.dashboardPassword = String(body.dashboardPassword).trim();
   config = deepMerge(config, body);
   saveConfig(config);
   res.json({ ok: true });
