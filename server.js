@@ -43,6 +43,7 @@ const CONFIG_PATH = (() => {
 
 const DEFAULT_CONFIG = {
   dashboardPassword: "admin",
+  apiKeys: [],
   defaultModel: "claude-opus-4-7",
   upstreams: [],
   retry: { infinite: true, attempts: 5, baseDelayMs: 1000, maxDelayMs: 20000, jitterMs: 750 },
@@ -90,6 +91,27 @@ const isConfigured = () =>
 
 const getEnabledUpstreams = () =>
   (config.upstreams || []).filter((u) => u.enabled !== false);
+
+// ---- API keys (rastreabilidade) ----
+const genApiKey = () => {
+  const rand = Array.from({ length: 32 }, () =>
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[Math.floor(Math.random() * 62)]
+  ).join("");
+  return `sk-bridge-${rand}`;
+};
+
+const findApiKey = (raw) => {
+  const k = (raw || "").trim();
+  if (!k) return null;
+  return (config.apiKeys || []).find((a) => a.key === k && a.enabled !== false) || null;
+};
+
+const touchApiKey = (keyObj, isError) => {
+  if (!keyObj) return;
+  keyObj.requests = (keyObj.requests || 0) + 1;
+  if (isError) keyObj.errors = (keyObj.errors || 0) + 1;
+  keyObj.lastUsed = new Date().toISOString();
+};
 
 // ============================================================
 // 4. EXPRESS APP, PORT, DNS, STARTED_AT
@@ -195,6 +217,13 @@ const PII_PATTERNS = [
 
 const detectPII = (text) => PII_PATTERNS.some((p) => p.test(text));
 
+// Extrai o "request id: ..." que provedores como Nuoda devolvem em erros.
+const parseUpstreamRequestId = (text) => {
+  if (!text) return null;
+  const m = String(text).match(/request[_\s-]?id[:\s"]+([a-zA-Z0-9_-]{8,})/i);
+  return m ? m[1] : null;
+};
+
 const preflightGuardrails = (body, route) => {
   const gr = config.guardrails;
   const messages = body.messages || [];
@@ -211,8 +240,14 @@ const preflightGuardrails = (body, route) => {
     const limit = gr.maxTokens.limit || 8192;
     const requested = body.max_tokens || body.maxTokens || 0;
     if (requested > limit) {
-      metrics.guardrailBlocks++;
-      return { blocked: true, reason: "max_tokens_exceeded", status: 400 };
+      // Clamp em vez de bloquear: muitos clientes (Claude Code, OpenClaw, Cursor)
+      // enviam max_tokens alto por padrão. Bloquear quebraria toda requisição.
+      metrics.guardrailClamps = (metrics.guardrailClamps || 0) + 1;
+      grState.maxTokens.lastClampedAt = new Date().toISOString();
+      grState.maxTokens.lastClampedFrom = requested;
+      grState.maxTokens.lastClampedTo = limit;
+      if (body.max_tokens !== undefined) body.max_tokens = limit;
+      if (body.maxTokens !== undefined) body.maxTokens = limit;
     }
   }
 
@@ -281,6 +316,9 @@ const isRetryableText = (text) => {
     t.includes("econnreset") ||
     t.includes("econnrefused") ||
     t.includes("socket hang up") ||
+    t.includes("no account is available") ||
+    t.includes("no available account") ||
+    t.includes("account is available") ||
     t.includes("没有可用token") ||
     t.includes("渠道异常") ||
     t.includes("无可用渠道") ||
@@ -390,40 +428,57 @@ const fetchUpstream = async (url, options, reqCtx) => {
         releaseUpstreamSlot();
       }
 
-      if (res.ok || isDefinitiveStatus(res.status)) {
-        if (res.ok) {
-          stat.success++;
-          bridgeState.consecutiveFailures = 0;
-        } else {
-          const bodyText = await res.clone().text().catch(() => "");
-          if (isDefinitiveText(bodyText)) {
-            stat.errors++;
-            pushErrorLog({
-              type: "upstream_error",
-              upstream: upstream.name,
-              upstreamId: upstream.id,
-              status: res.status,
-              message: bodyText.slice(0, 300),
-            });
-            return res;
-          }
-        }
+      if (res.ok) {
+        stat.success++;
+        bridgeState.consecutiveFailures = 0;
         return res;
       }
 
-      // Retryable HTTP status
+      // Resposta não-OK: lê o corpo uma vez para classificar.
       const bodyText = await res.clone().text().catch(() => "");
+      const reqId = parseUpstreamRequestId(bodyText);
+      const retryableByText = isRetryableText(bodyText);
+
+      // Definitivo (4xx exceto 429) E não-retryável por texto → devolve ao cliente.
+      // Mas "no account is available / try again later" sobrepõe e força retry.
+      if (isDefinitiveStatus(res.status) && !retryableByText) {
+        stat.errors++;
+        stat.lastError = `HTTP ${res.status}`;
+        stat.lastErrorTs = new Date().toISOString();
+        pushErrorLog({
+          type: isDefinitiveText(bodyText) ? "client_error" : "upstream_error",
+          upstream: upstream.name,
+          upstreamId: upstream.id,
+          status: res.status,
+          message: bodyText.slice(0, 500),
+          upstreamRequestId: reqId,
+          apiKeyName: reqCtx.apiKeyName || null,
+          model: reqCtx.model || null,
+          route: reqCtx.route || null,
+          attempt: attempt + 1,
+          definitive: true,
+        });
+        return res;
+      }
+
+      // Retryable (status retryável OU texto retryável)
       stat.errors++;
       stat.lastError = `HTTP ${res.status}`;
       stat.lastErrorTs = new Date().toISOString();
       bridgeState.consecutiveFailures++;
 
       pushErrorLog({
-        type: "upstream_error",
+        type: "upstream_retry",
         upstream: upstream.name,
         upstreamId: upstream.id,
         status: res.status,
-        message: bodyText.slice(0, 300),
+        message: bodyText.slice(0, 500),
+        upstreamRequestId: reqId,
+        apiKeyName: reqCtx.apiKeyName || null,
+        model: reqCtx.model || null,
+        route: reqCtx.route || null,
+        attempt: attempt + 1,
+        retryReason: retryableByText ? "retryable_text" : "retryable_status",
       });
 
       if (bridgeState.consecutiveFailures >= (circuitCfg.failures || 3)) {
@@ -455,6 +510,10 @@ const fetchUpstream = async (url, options, reqCtx) => {
         upstream: upstream.name,
         upstreamId: upstream.id,
         message: err.message,
+        apiKeyName: reqCtx.apiKeyName || null,
+        model: reqCtx.model || null,
+        route: reqCtx.route || null,
+        attempt: attempt + 1,
       });
 
       if (bridgeState.consecutiveFailures >= (circuitCfg.failures || 3)) {
@@ -488,12 +547,21 @@ const checkAuth = (req, res, next) => {
   }
   const auth = req.headers["authorization"] || "";
   const key = (auth.startsWith("Bearer ") ? auth.slice(7) : req.headers["x-api-key"] || "").trim();
-  const expected = config.dashboardPassword.trim();
-  if (key !== expected) {
-    console.warn('[auth] 401 — key mismatch (len recv=' + key.length + ' exp=' + expected.length + ')');
-    return res.status(401).json({ error: { message: "Invalid API key", type: "invalid_request_error" } });
+
+  // Aceita a senha do dashboard (chave "master") OU qualquer API key habilitada.
+  if (key === config.dashboardPassword.trim()) {
+    req.apiKeyObj = null;
+    req.apiKeyName = "master";
+    return next();
   }
-  next();
+  const keyObj = findApiKey(key);
+  if (keyObj) {
+    req.apiKeyObj = keyObj;
+    req.apiKeyName = keyObj.name;
+    return next();
+  }
+  console.warn('[auth] 401 — key mismatch (len recv=' + key.length + ')');
+  return res.status(401).json({ error: { message: "Invalid API key", type: "invalid_request_error" } });
 };
 
 const checkDashboardAuth = (req, res, next) => {
@@ -749,6 +817,7 @@ app.get("/admin/config", checkDashboardAuth, (req, res) => {
     ...config,
     dashboardPassword: maskKey(config.dashboardPassword),
     upstreams: config.upstreams.map((u) => ({ ...u, apiKey: maskKey(u.apiKey) })),
+    apiKeys: (config.apiKeys || []).map((a) => ({ ...a, key: maskKey(a.key) })),
   };
   res.json(masked);
 });
@@ -789,6 +858,16 @@ app.get("/admin/status", checkDashboardAuth, (req, res) => {
       ...u,
       apiKey: maskKey(u.apiKey),
       stats: getUpstreamStat(u.id),
+    })),
+    apiKeys: (config.apiKeys || []).map((a) => ({
+      id: a.id,
+      name: a.name,
+      key: maskKey(a.key),
+      enabled: a.enabled !== false,
+      createdAt: a.createdAt,
+      lastUsed: a.lastUsed || null,
+      requests: a.requests || 0,
+      errors: a.errors || 0,
     })),
     guardrails: {
       budget: { ...grState.budget },
@@ -853,6 +932,59 @@ app.delete("/admin/errors", checkDashboardAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// GET /admin/keys (dashboard auth) — lista chaves com stats, valor mascarado
+app.get("/admin/keys", checkDashboardAuth, (req, res) => {
+  res.json((config.apiKeys || []).map((a) => ({
+    id: a.id,
+    name: a.name,
+    key: maskKey(a.key),
+    enabled: a.enabled !== false,
+    createdAt: a.createdAt,
+    lastUsed: a.lastUsed || null,
+    requests: a.requests || 0,
+    errors: a.errors || 0,
+  })));
+});
+
+// POST /admin/keys (dashboard auth) — cria nova chave, retorna valor COMPLETO uma vez
+app.post("/admin/keys", checkDashboardAuth, (req, res) => {
+  const name = String((req.body && req.body.name) || "").trim() || "Sem nome";
+  const newKey = {
+    id: genId(),
+    name,
+    key: genApiKey(),
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    lastUsed: null,
+    requests: 0,
+    errors: 0,
+  };
+  if (!Array.isArray(config.apiKeys)) config.apiKeys = [];
+  config.apiKeys.push(newKey);
+  saveConfig(config);
+  // Retorna o valor completo só nesta resposta — depois fica mascarado.
+  res.json({ ok: true, id: newKey.id, name: newKey.name, key: newKey.key });
+});
+
+// PATCH /admin/keys/:id (dashboard auth) — habilita/desabilita ou renomeia
+app.patch("/admin/keys/:id", checkDashboardAuth, (req, res) => {
+  const k = (config.apiKeys || []).find((a) => a.id === req.params.id);
+  if (!k) return res.status(404).json({ error: "Key not found" });
+  if (req.body.enabled !== undefined) k.enabled = !!req.body.enabled;
+  if (req.body.name !== undefined) k.name = String(req.body.name).trim() || k.name;
+  saveConfig(config);
+  res.json({ ok: true });
+});
+
+// DELETE /admin/keys/:id (dashboard auth) — revoga (remove) a chave
+app.delete("/admin/keys/:id", checkDashboardAuth, (req, res) => {
+  const before = (config.apiKeys || []).length;
+  config.apiKeys = (config.apiKeys || []).filter((a) => a.id !== req.params.id);
+  if (config.apiKeys.length === before) return res.status(404).json({ error: "Key not found" });
+  saveConfig(config);
+  res.json({ ok: true });
+});
+
 // GET /v1/models (proxy auth)
 app.get("/v1/models", instrument("/v1/models"), checkAuth, async (req, res) => {
   const upstreams = getEnabledUpstreams();
@@ -883,6 +1015,7 @@ app.post("/v1/chat/completions", instrument("/v1/chat/completions"), checkAuth, 
 
   const anthropicBody = convertOpenAIToAnthropic(req.body);
   const isStream = req.body.stream === true;
+  const reqModel = req.body.model || config.defaultModel;
 
   try {
     const upstreamRes = await fetchUpstream(
@@ -892,22 +1025,25 @@ app.post("/v1/chat/completions", instrument("/v1/chat/completions"), checkAuth, 
         headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" },
         body: JSON.stringify(anthropicBody),
       },
-      { upstreams, route: "/v1/chat/completions", method: "POST" }
+      { upstreams, route: "/v1/chat/completions", method: "POST", apiKeyName: req.apiKeyName, model: reqModel }
     );
 
     if (!upstreamRes.ok) {
       const errBody = await upstreamRes.text().catch(() => "");
+      touchApiKey(req.apiKeyObj, true);
       return res.status(upstreamRes.status).json({ error: { message: errBody } });
     }
+    touchApiKey(req.apiKeyObj, false);
 
     if (isStream) {
-      await sendOpenAIStream(upstreamRes, res, req.body.model || config.defaultModel);
+      await sendOpenAIStream(upstreamRes, res, reqModel);
     } else {
       const data = await upstreamRes.json();
       recordUsage(data.usage);
-      res.json(convertAnthropicToOpenAI(data, req.body.model || config.defaultModel));
+      res.json(convertAnthropicToOpenAI(data, reqModel));
     }
   } catch (err) {
+    touchApiKey(req.apiKeyObj, true);
     res.status(502).json({ error: { message: err.message } });
   }
 });
@@ -923,16 +1059,19 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
   const isStream = req.body.stream === true;
   const forceNonStream = config.openclawForceNonStreamRetry === true && isStream;
   const body = forceNonStream ? { ...req.body, stream: false } : req.body;
+  const reqModel = req.body.model || config.defaultModel;
   try {
     const upstreamRes = await fetchUpstream(
       "/v1/messages",
       { method: "POST", headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" }, body: JSON.stringify(body) },
-      { upstreams, route: "/v1/messages", method: "POST" }
+      { upstreams, route: "/v1/messages", method: "POST", apiKeyName: req.apiKeyName, model: reqModel }
     );
     if (!upstreamRes.ok) {
       const errBody = await upstreamRes.text().catch(() => "");
+      touchApiKey(req.apiKeyObj, true);
       return res.status(upstreamRes.status).json({ error: { message: errBody } });
     }
+    touchApiKey(req.apiKeyObj, false);
     if (isStream && !forceNonStream) {
       copyAnthropicHeaders(upstreamRes, res);
       await sendUpstreamResponse(upstreamRes, res);
@@ -947,6 +1086,7 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
       res.json(data);
     }
   } catch (err) {
+    touchApiKey(req.apiKeyObj, true);
     res.status(502).json({ error: { message: err.message } });
   }
 });

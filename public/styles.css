@@ -589,3 +589,14 @@ footer { margin-top: 24px; padding: 18px 0; }
 .connect-copy-btn:hover { border-color: var(--accent-2); color: var(--text); }
 .connect-note { line-height: 1.6; }
 .connect-note code { font-size: 11px; }
+
+/* ============ KEYS TAB ============ */
+.key-item {
+  padding: 12px; margin-bottom: 8px;
+  background: #0c1322; border: 1px solid var(--border); border-radius: 10px;
+}
+.key-item-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.key-item-name { font-weight: 600; font-size: 14px; }
+.key-item-value { font-size: 11px; color: var(--muted); }
+.key-item-stats { margin-bottom: 6px; }
+.key-item-actions { display: flex; gap: 8px; }

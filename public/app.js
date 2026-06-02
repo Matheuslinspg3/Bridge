@@ -127,8 +127,10 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     btn.classList.add("active");
     const tab = btn.dataset.tab;
     $("#tabMain").classList.toggle("hidden", tab !== "tabMain");
+    $("#tabKeys").classList.toggle("hidden", tab !== "tabKeys");
     $("#tabSettings").classList.toggle("hidden", tab !== "tabSettings");
     if (tab === "tabSettings") refreshSettings();
+    if (tab === "tabKeys") refreshKeys();
   });
 });
 
@@ -614,6 +616,107 @@ $("#savePassBtn").addEventListener("click", async () => {
   $("#passCfgMsg").textContent = "Senha alterada. Faça login novamente.";
   clearToken();
   setTimeout(() => init(), 1500);
+});
+
+/* ---- Keys Tab ---- */
+async function refreshKeys() {
+  try {
+    const r = await fetch("/admin/keys", { headers: { Authorization: `Bearer ${getToken()}` } });
+    if (!r.ok) return;
+    const keys = await r.json();
+    renderKeysList(keys);
+  } catch(e) { console.error("[keys]", e); }
+  // Also refresh the detailed error log
+  try {
+    const r = await fetch("/admin/errors", { headers: { Authorization: `Bearer ${getToken()}` } });
+    if (!r.ok) return;
+    const errors = await r.json();
+    renderDetailErrors(errors);
+  } catch(e) { console.error("[detail-errors]", e); }
+}
+
+function renderKeysList(keys) {
+  const el = $("#keysList");
+  if (!keys.length) {
+    el.innerHTML = '<p class="muted small center">Nenhuma chave criada. Use a senha master ou crie chaves para rastrear uso.</p>';
+    return;
+  }
+  el.innerHTML = keys.map(k => `
+    <div class="key-item">
+      <div class="key-item-info">
+        <span class="key-item-name">${escHtml(k.name)}</span>
+        <code class="key-item-value">${escHtml(k.key)}</code>
+        <span class="muted small">${k.enabled ? '✓ ativa' : '✗ desabilitada'}</span>
+      </div>
+      <div class="key-item-stats muted small">
+        <span>${k.requests} reqs</span> · <span class="bad">${k.errors} erros</span> · <span>último uso: ${k.lastUsed ? humanDate(k.lastUsed) : '—'}</span>
+      </div>
+      <div class="key-item-actions">
+        <button class="btn-sm" onclick="toggleKey('${k.id}',${!k.enabled})">${k.enabled ? 'Desabilitar' : 'Habilitar'}</button>
+        <button class="btn-sm danger" onclick="revokeKey('${k.id}')">Revogar</button>
+      </div>
+    </div>
+  `).join("");
+}
+
+function renderDetailErrors(errors) {
+  const tbody = $("#detailErrorTable");
+  const empty = $("#detailErrorEmpty");
+  const count = $("#detailErrorCount");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  count.textContent = errors.length ? `(${errors.length})` : "";
+  if (!errors.length) { empty.classList.remove("hidden"); return; }
+  empty.classList.add("hidden");
+  const recent = errors.slice(-100).reverse();
+  for (const e of recent) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${humanTime(e.ts)}</td>
+      <td><code>${escHtml(e.apiKeyName || '—')}</code></td>
+      <td>${escHtml(e.model || '—')}</td>
+      <td><code>${escHtml(e.route || '—')}</code></td>
+      <td class="${(e.status||0)>=500?'bad':(e.status||0)>=400?'warn':''}">${e.status || '—'}</td>
+      <td>${escHtml(e.upstream || '—')}</td>
+      <td><code class="small">${escHtml(e.upstreamRequestId || '—')}</code></td>
+      <td>${e.attempt || '—'}</td>
+      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(e.message||'')}">${escHtml((e.message||'').slice(0,80))}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+window.toggleKey = async (id, enabled) => {
+  await fetch(`/admin/keys/${id}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled })
+  });
+  refreshKeys();
+};
+
+window.revokeKey = async (id) => {
+  if (!confirm("Revogar esta chave? Ela deixará de funcionar imediatamente.")) return;
+  await fetch(`/admin/keys/${id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${getToken()}` }
+  });
+  refreshKeys();
+};
+
+$("#createKeyBtn").addEventListener("click", async () => {
+  const name = prompt("Nome da chave (ex: n8n-prod, cursor-matheus):");
+  if (!name) return;
+  const r = await fetch("/admin/keys", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name })
+  });
+  const data = await r.json();
+  if (data.key) {
+    $("#newKeyValue").textContent = data.key;
+    $("#newKeyResult").classList.remove("hidden");
+  }
+  refreshKeys();
 });
 
 /* ---- Auto-refresh ---- */

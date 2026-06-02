@@ -61,6 +61,7 @@
     </header>
     <nav class="tab-nav">
       <button class="tab-btn active" data-tab="tabMain">Vis&#227;o Geral</button>
+      <button class="tab-btn" data-tab="tabKeys">&#128273; Chaves de API</button>
       <button class="tab-btn" data-tab="tabSettings">&#9881; Configura&#231;&#245;es</button>
     </nav>
 
@@ -166,6 +167,37 @@
 
     <footer class="muted small center">Claude Bridge v1.3.0-infinite-retry · OpenAI &#8644; Anthropic · retry infinito, circuit breaker, guardrails e dashboard</footer>
     </div><!-- /tabMain -->
+    <!-- ============ TAB: KEYS ============ -->
+    <div id="tabKeys" class="hidden">
+    <section class="grid">
+      <div class="card">
+        <div class="card-header-row">
+          <h3>Chaves de API</h3>
+          <button id="createKeyBtn" class="btn-sm">+ Nova chave</button>
+        </div>
+        <p class="muted small">Crie chaves para rastrear uso por cliente/app. Cada chave funciona como Bearer token para chamar o bridge.</p>
+        <div id="keysList"></div>
+        <div id="newKeyResult" class="hidden" style="margin-top:12px;padding:12px;background:#0c1322;border:1px solid var(--border);border-radius:8px">
+          <p class="small" style="margin:0 0 6px"><b>Chave criada (copie agora — não será exibida novamente):</b></p>
+          <code id="newKeyValue" style="font-size:13px;word-break:break-all"></code>
+          <button class="btn-sm" style="margin-top:8px" onclick="copyText(this,document.getElementById('newKeyValue').textContent)">Copiar</button>
+        </div>
+      </div>
+    </section>
+    <section class="grid">
+      <div class="card">
+        <div class="card-header-row">
+          <h3>Log de erros detalhado</h3>
+          <span id="detailErrorCount" class="muted small"></span>
+        </div>
+        <div class="table-scroll" style="max-height:400px">
+          <table class="mini"><thead><tr><th>Hora</th><th>Chave</th><th>Modelo</th><th>Rota</th><th>Status</th><th>Upstream</th><th>Request ID</th><th>Tentativa</th><th>Mensagem</th></tr></thead><tbody id="detailErrorTable"></tbody></table>
+        </div>
+        <p id="detailErrorEmpty" class="muted small center" style="padding:12px 0">Nenhum erro registrado.</p>
+      </div>
+    </section>
+    </div><!-- /tabKeys -->
+
     <!-- ============ TAB: SETTINGS ============ -->
     <div id="tabSettings" class="hidden">
     <section class="grid">
