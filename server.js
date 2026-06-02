@@ -171,10 +171,10 @@ const getUpstreamStat = (id) => {
 // 7. GUARDRAILS RUNTIME STATE
 // ============================================================
 const grState = {
-  pii: {},
-  maxTokens: {},
-  budget: { day: dayKey(), usedUsd: 0 },
-  modelSwap: {},
+  pii: { blocked: 0, lastBlockAt: null },
+  maxTokens: { blocked: 0, clamped: 0, lastBlockAt: null },
+  budget: { day: dayKey(), usedUsd: 0, totalUsd: 0, blocked: 0, lastBlockAt: null, history: [] },
+  modelSwap: { detected: 0, swaps: [] },
 };
 
 const rotateBudgetIfNeeded = () => {
@@ -574,11 +574,12 @@ const checkDashboardAuth = (req, res, next) => {
 
 const instrument = (route) => (req, res, next) => {
   metrics.totalRequests++;
-  if (!metrics.byRoute[route]) metrics.byRoute[route] = { requests: 0, success: 0, errors: 0 };
+  if (!metrics.byRoute[route]) metrics.byRoute[route] = { requests: 0, success: 0, errors: 0, totalMs: 0 };
   metrics.byRoute[route].requests++;
   const start = Date.now();
   res.on("finish", () => {
     const dur = Date.now() - start;
+    metrics.byRoute[route].totalMs = (metrics.byRoute[route].totalMs || 0) + dur;
     if (res.statusCode < 400) {
       metrics.totalSuccess++;
       metrics.byRoute[route].success++;
@@ -586,7 +587,7 @@ const instrument = (route) => (req, res, next) => {
       metrics.totalErrors++;
       metrics.byRoute[route].errors++;
     }
-    pushRecent({ route, status: res.statusCode, durationMs: dur });
+    pushRecent({ route, method: req.method, status: res.statusCode, durationMs: dur });
   });
   next();
 };
@@ -850,39 +851,86 @@ app.post("/admin/config", checkDashboardAuth, (req, res) => {
 
 // GET /admin/status (dashboard auth)
 app.get("/admin/status", checkDashboardAuth, (req, res) => {
+  const now = Date.now();
+  const activeUpstream = (getEnabledUpstreams()[0] || {}).name || "—";
+  const gr = config.guardrails || {};
+
+  // by_route no formato que o frontend espera (count/ok/err/avgMs)
+  const byRoute = {};
+  for (const [route, r] of Object.entries(metrics.byRoute || {})) {
+    byRoute[route] = {
+      count: r.requests || 0,
+      ok: r.success || 0,
+      err: r.errors || 0,
+      avgMs: r.totalMs && r.requests ? Math.round(r.totalMs / r.requests) : 0,
+    };
+  }
+
   res.json({
     configured: isConfigured(),
-    startedAt: STARTED_AT,
-    uptime: Math.floor((Date.now() - new Date(STARTED_AT).getTime()) / 1000),
-    upstreams: config.upstreams.map((u) => ({
-      ...u,
-      apiKey: maskKey(u.apiKey),
-      stats: getUpstreamStat(u.id),
+    uptime_ms: now - new Date(STARTED_AT).getTime(),
+    state: {
+      active_upstream: activeUpstream,
+      consecutive_failures: bridgeState.consecutiveFailures,
+      circuit_open: bridgeState.circuitUntil > now,
+      circuit_remaining_ms: Math.max(0, bridgeState.circuitUntil - now),
+    },
+    metrics: {
+      total_requests: metrics.totalRequests,
+      total_success: metrics.totalSuccess,
+      total_errors: metrics.totalErrors,
+      upstream_retries: metrics.upstreamRetries,
+      circuit_opened_count: metrics.circuitOpenedCount,
+      by_route: byRoute,
+    },
+    recent: (metrics.recent || []).map((e) => ({
+      at: e.ts,
+      method: e.method || "POST",
+      route: e.route,
+      status: e.status,
+      ms: e.durationMs,
+      ok: e.status < 400,
+      blocked: e.blocked || null,
+      error_id: e.errorId || null,
     })),
-    apiKeys: (config.apiKeys || []).map((a) => ({
-      id: a.id,
-      name: a.name,
-      key: maskKey(a.key),
-      enabled: a.enabled !== false,
-      createdAt: a.createdAt,
-      lastUsed: a.lastUsed || null,
-      requests: a.requests || 0,
-      errors: a.errors || 0,
+    error_log: errorLog.slice(-50).reverse().map((e) => ({
+      id: e.id,
+      at: e.ts,
+      route: e.route || null,
+      type: e.type,
+      status: e.status || null,
+      message: e.message || "",
+      retries_taken: e.attempt || 0,
+      duration_ms: e.durationMs || null,
+      request_id: e.upstreamRequestId || null,
+      api_key: e.apiKeyName || null,
+      model: e.model || null,
+      upstream: e.upstream || null,
+      body_snippet: e.body_snippet || e.message || "",
     })),
     guardrails: {
-      budget: { ...grState.budget },
+      pii: { enabled: gr.pii?.enabled !== false, blocked: grState.pii.blocked || 0, last_block_at: grState.pii.lastBlockAt },
+      max_tokens: { enabled: gr.maxTokens?.enabled !== false, blocked: grState.maxTokens.blocked || 0, limit: gr.maxTokens?.limit || 8192, last_block_at: grState.maxTokens.lastBlockAt },
+      budget: { enabled: gr.budget?.enabled !== false, blocked: grState.budget.blocked || 0, last_block_at: grState.budget.lastBlockAt, today_spent_usd: grState.budget.usedUsd || 0, daily_usd: gr.budget?.dailyUsd || 10, total_spent_usd: grState.budget.totalUsd || 0, history: grState.budget.history || [] },
+      model_swap: { enabled: gr.modelSwap?.enabled !== false, detected: grState.modelSwap.detected || 0, swaps: grState.modelSwap.swaps || [] },
     },
-    error_log: errorLog.slice(-50),
-    metrics,
+    apiKeys: (config.apiKeys || []).map((a) => ({
+      id: a.id, name: a.name, key: maskKey(a.key), enabled: a.enabled !== false,
+      createdAt: a.createdAt, lastUsed: a.lastUsed || null, requests: a.requests || 0, errors: a.errors || 0,
+    })),
     config: {
-      ...config,
-      dashboardPassword: maskKey(config.dashboardPassword),
-      upstreams: config.upstreams.map((u) => ({ ...u, apiKey: maskKey(u.apiKey) })),
+      defaultModel: config.defaultModel,
+      upstream_base_url: (getEnabledUpstreams()[0] || {}).baseUrl || "—",
+      default_model: config.defaultModel,
+      upstream_max_concurrency: config.concurrency?.maxConcurrency,
+      upstream_min_interval_ms: config.concurrency?.minIntervalMs,
+      upstream_timeout_ms: config.concurrency?.timeoutMs,
+      upstream_infinite_retry: config.retry?.infinite !== false,
+      upstream_retry_max_delay_ms: config.retry?.maxDelayMs,
+      upstream_retry_attempts: config.retry?.attempts,
+      openclaw_force_non_stream_retry: config.openclawForceNonStreamRetry === true,
     },
-    versions: {
-      node: process.version,
-      bridge: "1.4.0-config-ui",
-    },
+    versions: { node: process.version, bridge: "1.5.0-traceability" },
   });
 });
 

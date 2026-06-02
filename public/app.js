@@ -292,9 +292,11 @@ function openErrorModal(error) {
   const body = $("#modalBody");
   const fields = [
     ["ID", error.id], ["Hora", humanDate(error.at)], ["Rota", error.route],
-    ["Método", error.method], ["Tipo", errorTypeBadge(error.type)], ["Status HTTP", error.status],
+    ["Tipo", errorTypeBadge(error.type)], ["Status HTTP", error.status],
+    ["Request ID (upstream)", error.request_id], ["Chave de API", error.api_key],
+    ["Modelo", error.model], ["Upstream", error.upstream],
     ["Retries", error.retries_taken], ["Duração", error.duration_ms ? error.duration_ms + " ms" : "—"],
-    ["Upstream URL", error.upstream_url], ["Mensagem", error.message]
+    ["Mensagem", error.message]
   ];
   let html = "";
   for (const [label, val] of fields) {
