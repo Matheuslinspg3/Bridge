@@ -271,6 +271,25 @@ const recordUsage = (usage) => {
   grState.budget.usedUsd = round4(
     grState.budget.usedUsd + estimateUsd(inputTokens, outputTokens)
   );
+  grState.budget.totalUsd = round4((grState.budget.totalUsd || 0) + estimateUsd(inputTokens, outputTokens));
+};
+
+// Detecta quando o upstream devolve um modelo diferente do solicitado.
+const detectModelSwap = (requested, returned, route) => {
+  if (!config.guardrails?.modelSwap?.enabled) return;
+  if (!requested || !returned) return;
+  // Normaliza: ignora diferença só de sufixo de data (ex: -20250514)
+  const norm = (m) => String(m).toLowerCase().replace(/-\d{8}$/, "").trim();
+  if (norm(requested) === norm(returned)) return;
+  grState.modelSwap.detected = (grState.modelSwap.detected || 0) + 1;
+  grState.modelSwap.swaps = grState.modelSwap.swaps || [];
+  grState.modelSwap.swaps.unshift({
+    at: new Date().toISOString(),
+    route: route || null,
+    requested,
+    returned,
+  });
+  if (grState.modelSwap.swaps.length > 50) grState.modelSwap.swaps.length = 50;
 };
 
 // ============================================================
@@ -951,7 +970,24 @@ app.post("/admin/reset", checkDashboardAuth, (req, res) => {
 
 // POST /admin/guardrails (dashboard auth)
 app.post("/admin/guardrails", checkDashboardAuth, (req, res) => {
-  config.guardrails = deepMerge(config.guardrails, req.body || {});
+  const body = req.body || {};
+  // O frontend envia snake_case (max_tokens, model_swap) mas o config usa
+  // camelCase (maxTokens, modelSwap). Normaliza antes do merge para não
+  // criar chaves fantasma que ninguém lê.
+  const normalized = {};
+  if (body.pii !== undefined) normalized.pii = body.pii;
+  if (body.budget !== undefined) {
+    normalized.budget = { ...body.budget };
+    if (body.budget.daily_usd !== undefined) normalized.budget.dailyUsd = body.budget.daily_usd;
+  }
+  if (body.max_tokens !== undefined || body.maxTokens !== undefined) {
+    const mt = body.max_tokens || body.maxTokens;
+    normalized.maxTokens = { ...mt };
+  }
+  if (body.model_swap !== undefined || body.modelSwap !== undefined) {
+    normalized.modelSwap = body.model_swap || body.modelSwap;
+  }
+  config.guardrails = deepMerge(config.guardrails, normalized);
   saveConfig(config);
   res.json({ ok: true });
 });
@@ -1088,6 +1124,7 @@ app.post("/v1/chat/completions", instrument("/v1/chat/completions"), checkAuth, 
     } else {
       const data = await upstreamRes.json();
       recordUsage(data.usage);
+      detectModelSwap(reqModel, data.model, "/v1/chat/completions");
       res.json(convertAnthropicToOpenAI(data, reqModel));
     }
   } catch (err) {
@@ -1126,10 +1163,12 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
     } else if (forceNonStream && isStream) {
       const data = await upstreamRes.json();
       recordUsage(data.usage);
+      detectModelSwap(reqModel, data.model, "/v1/messages");
       await sendAnthropicStreamFromMessage(data, res);
     } else {
       const data = await upstreamRes.json();
       recordUsage(data.usage);
+      detectModelSwap(reqModel, data.model, "/v1/messages");
       copyAnthropicHeaders(upstreamRes, res);
       res.json(data);
     }
