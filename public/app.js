@@ -526,7 +526,11 @@ function renderUpstreamsList(upstreams) {
   el.innerHTML = upstreams.map(u => `
     <div class="upstream-item">
       <div class="upstream-item-info">
-        <div class="upstream-item-name">${escHtml(u.name)} ${u.enabled===false?'<span class="pill pill-warn">desativado</span>':''}</div>
+        <div class="upstream-item-name">${escHtml(u.name)} ${u.enabled===false?'<span class="pill pill-warn">desativado</span>':''}
+          <span class="pill pill-ok small">#${u.priority||10}</span>
+          <span class="pill small">${u.vendor||'anthropic'}</span>
+          ${u.fallbackModel?'<span class="pill pill-warn small">fallback: '+escHtml(u.fallbackModel)+'</span>':''}
+        </div>
         <div class="upstream-item-url muted small">${escHtml(u.baseUrl)}</div>
         <div class="upstream-item-key muted small">Key: ${escHtml(u.apiKey || "")}</div>
       </div>
@@ -548,6 +552,9 @@ function showUpstreamForm(upstream) {
     $("#ufKey").value = "";
     $("#ufKey").placeholder = upstream.apiKey || "sk-...";
     $("#ufEnabled").checked = upstream.enabled !== false;
+    $("#ufPriority").value = upstream.priority || 10;
+    $("#ufVendor").value = upstream.vendor || "anthropic";
+    $("#ufFallbackModel").value = upstream.fallbackModel || "";
   } else {
     $("#ufTitle").textContent = "Novo upstream";
     $("#ufId").value = "";
@@ -556,6 +563,9 @@ function showUpstreamForm(upstream) {
     $("#ufKey").value = "";
     $("#ufKey").placeholder = "sk-...";
     $("#ufEnabled").checked = true;
+    $("#ufPriority").value = 10;
+    $("#ufVendor").value = "anthropic";
+    $("#ufFallbackModel").value = "";
   }
   form.classList.remove("hidden");
 }
@@ -582,17 +592,20 @@ $("#ufSaveBtn").addEventListener("click", async () => {
   const baseUrl = $("#ufUrl").value.trim();
   const apiKey = $("#ufKey").value.trim();
   const enabled = $("#ufEnabled").checked;
+  const priority = Number($("#ufPriority").value) || 10;
+  const vendor = $("#ufVendor").value || "anthropic";
+  const fallbackModel = $("#ufFallbackModel").value.trim() || null;
   if (!name || !baseUrl) return;
   let upstreams = [...(_cfg?.upstreams || [])];
   if (id) {
     upstreams = upstreams.map(u => {
       if (u.id !== id) return u;
-      const updated = { ...u, name, baseUrl, enabled };
+      const updated = { ...u, name, baseUrl, enabled, priority, vendor, fallbackModel };
       if (apiKey) updated.apiKey = apiKey;
       return updated;
     });
   } else {
-    upstreams.push({ name, baseUrl, apiKey: apiKey || "", enabled });
+    upstreams.push({ name, baseUrl, apiKey: apiKey || "", enabled, priority, vendor, fallbackModel });
   }
   await postConfig({ upstreams });
   $("#upstreamForm").classList.add("hidden");

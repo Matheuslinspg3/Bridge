@@ -208,9 +208,12 @@
         <div id="upstreamForm" class="upstream-form hidden">
           <h4 id="ufTitle">Novo upstream</h4>
           <input type="hidden" id="ufId" value="" />
-          <div class="form-row"><label>Nome</label><input type="text" id="ufName" placeholder="ex: Nuoda Principal" /></div>
-          <div class="form-row"><label>Base URL</label><input type="text" id="ufUrl" placeholder="https://api.nuoda.vip" /></div>
+          <div class="form-row"><label>Nome</label><input type="text" id="ufName" placeholder="ex: AIGoCode CC" /></div>
+          <div class="form-row"><label>Base URL</label><input type="text" id="ufUrl" placeholder="https://api.aigocode.com" /></div>
           <div class="form-row"><label>API Key</label><input type="password" id="ufKey" placeholder="sk-..." /></div>
+          <div class="form-row"><label>Prioridade (1=mais barato)</label><input type="number" id="ufPriority" min="1" max="99" value="10" /></div>
+          <div class="form-row"><label>Vendor</label><select id="ufVendor"><option value="anthropic">Anthropic (Claude)</option><option value="openai">OpenAI (GPT)</option><option value="google">Google (Gemini)</option></select></div>
+          <div class="form-row"><label>Fallback Model (só cross-vendor)</label><input type="text" id="ufFallbackModel" placeholder="ex: gpt-5.5 (vazio se não é fallback)" /></div>
           <div class="form-row inline">
             <label><input type="checkbox" id="ufEnabled" checked /> Ativo</label>
             <button id="ufSaveBtn" class="btn-sm">Salvar</button>
