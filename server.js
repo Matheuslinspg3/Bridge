@@ -28,6 +28,22 @@ const maskKey = (key) => {
 };
 
 // ============================================================
+// 2b. MURMURHASH3 (sticky routing)
+// ============================================================
+const murmurhash3 = (str, seed = 0) => {
+  let h = seed ^ str.length;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x5bd1e995);
+    h ^= h >>> 15;
+  }
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+};
+
+// ============================================================
 // 3. CONFIG PERSISTENCE
 // ============================================================
 const CONFIG_PATH = (() => {
@@ -165,6 +181,66 @@ const getUpstreamStat = (id) => {
     };
   }
   return upstreamStats[id];
+};
+
+// ============================================================
+// 6b. HEALTH CHECK STATE
+// ============================================================
+const healthState = {}; // keyed by upstream.id
+
+const getHealthState = (id) => {
+  if (!healthState[id]) {
+    healthState[id] = {
+      healthy: true,
+      consecutiveFailures: 0,
+      lastCheckAt: null,
+      lastCheckOk: null,
+      lastCheckMs: null,
+    };
+  }
+  return healthState[id];
+};
+
+const runHealthCheck = async (upstream) => {
+  const hs = getHealthState(upstream.id);
+  const start = Date.now();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(`${upstream.baseUrl}/v1/models`, {
+      headers: { "x-api-key": upstream.apiKey, Authorization: `Bearer ${upstream.apiKey}` },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    // 200 = alive, 401 = alive (requires key but server responded)
+    if (res.status === 200 || res.status === 401) {
+      hs.consecutiveFailures = 0;
+      hs.healthy = true;
+      hs.lastCheckOk = true;
+    } else {
+      hs.consecutiveFailures++;
+      hs.lastCheckOk = false;
+      if (hs.consecutiveFailures >= 3) hs.healthy = false;
+    }
+  } catch {
+    hs.consecutiveFailures++;
+    hs.lastCheckOk = false;
+    if (hs.consecutiveFailures >= 3) hs.healthy = false;
+  }
+  hs.lastCheckAt = new Date().toISOString();
+  hs.lastCheckMs = Date.now() - start;
+};
+
+const runAllHealthChecks = async () => {
+  const upstreams = getEnabledUpstreams();
+  await Promise.allSettled(upstreams.map((u) => runHealthCheck(u)));
+};
+
+const startHealthCheckLoop = () => {
+  // Run immediately on startup
+  setTimeout(() => runAllHealthChecks(), 2000);
+  // Then every 30 seconds
+  setInterval(() => runAllHealthChecks(), 30000);
 };
 
 // ============================================================
@@ -391,11 +467,71 @@ const fetchWithTimeout = async (url, options, timeoutMs) => {
 };
 
 // ============================================================
-// 11. FETCH UPSTREAM
+// 11. FETCH UPSTREAM (priority + sticky + cross-vendor fallback)
 // ============================================================
+
+// Sort upstreams by priority (lower = cheaper/preferred)
+const sortByPriority = (upstreams) =>
+  [...upstreams].sort((a, b) => (a.priority || 10) - (b.priority || 10));
+
+// Get healthy upstreams of a specific vendor, sorted by priority
+const getHealthyByVendor = (upstreams, vendor) =>
+  sortByPriority(upstreams.filter((u) => {
+    const v = u.vendor || "anthropic";
+    const hs = getHealthState(u.id);
+    return v === vendor && hs.healthy && u.enabled !== false;
+  }));
+
+// Pick sticky upstream for a user identifier
+const pickStickyUpstream = (upstreams, userId) => {
+  if (!userId || !upstreams.length) return upstreams[0] || null;
+  const sorted = sortByPriority(upstreams);
+  const healthy = sorted.filter((u) => getHealthState(u.id).healthy);
+  const pool = healthy.length > 0 ? healthy : sorted;
+  const idx = murmurhash3(userId) % pool.length;
+  return pool[idx];
+};
+
+// Convert Anthropic request to OpenAI format for cross-vendor fallback
+const convertAnthropicRequestToOpenAI = (anthropicBody, fallbackModel) => {
+  const messages = [];
+  if (anthropicBody.system) {
+    messages.push({ role: "system", content: anthropicBody.system });
+  }
+  for (const m of (anthropicBody.messages || [])) {
+    messages.push({ role: m.role, content: m.content });
+  }
+  return {
+    model: fallbackModel,
+    messages,
+    max_tokens: anthropicBody.max_tokens || 4096,
+    temperature: anthropicBody.temperature,
+    top_p: anthropicBody.top_p,
+    stream: anthropicBody.stream || false,
+  };
+};
+
+// Convert OpenAI response back to Anthropic format
+const convertOpenAIResponseToAnthropic = (openaiData, originalModel) => {
+  const choice = (openaiData.choices || [])[0] || {};
+  const msg = choice.message || {};
+  return {
+    id: openaiData.id || genId(),
+    type: "message",
+    role: "assistant",
+    model: originalModel,
+    content: [{ type: "text", text: msg.content || "" }],
+    stop_reason: choice.finish_reason || "end_turn",
+    usage: {
+      input_tokens: openaiData.usage?.prompt_tokens || 0,
+      output_tokens: openaiData.usage?.completion_tokens || 0,
+    },
+  };
+};
+
 const fetchUpstream = async (url, options, reqCtx) => {
-  const upstreams = reqCtx.upstreams || [];
-  if (!upstreams.length) throw new Error("No upstreams configured");
+  const allUpstreams = reqCtx.upstreams || [];
+  if (!allUpstreams.length) throw new Error("No upstreams configured");
 
   const retryCfg = config.retry;
   const circuitCfg = config.circuit;
@@ -403,12 +539,41 @@ const fetchUpstream = async (url, options, reqCtx) => {
   const infinite = retryCfg.infinite !== false;
   const maxAttempts = infinite ? Infinity : (retryCfg.attempts || 5);
 
+  // --- Priority + Sticky routing ---
+  // Filter to same-vendor upstreams first (anthropic for /v1/messages)
+  const requestVendor = reqCtx.requestVendor || "anthropic";
+  const sameVendor = sortByPriority(
+    allUpstreams.filter((u) => (u.vendor || "anthropic") === requestVendor)
+  );
+  const healthySameVendor = sameVendor.filter((u) => getHealthState(u.id).healthy);
+
+  // Sticky: hash user to a preferred upstream
+  const userId = reqCtx.userId || reqCtx.apiKeyName || null;
+  const stickyTarget = pickStickyUpstream(
+    healthySameVendor.length > 0 ? healthySameVendor : sameVendor,
+    userId
+  );
+
+  // Build ordered attempt list: sticky first, then rest by priority
+  const orderedUpstreams = [stickyTarget, ...sameVendor.filter((u) => u.id !== stickyTarget?.id)];
+
   let attempt = 0;
   let upstreamIdx = 0;
 
   while (attempt < maxAttempts) {
-    const upstream = upstreams[upstreamIdx % upstreams.length];
+    // If we've exhausted same-vendor upstreams, break to cross-vendor fallback
+    if (upstreamIdx >= orderedUpstreams.length && attempt > 0) break;
+
+    const upstream = orderedUpstreams[upstreamIdx % orderedUpstreams.length];
+    if (!upstream) break;
     const stat = getUpstreamStat(upstream.id);
+    const hs = getHealthState(upstream.id);
+
+    // Skip unhealthy on first pass (allow on last resort)
+    if (!hs.healthy && upstreamIdx < orderedUpstreams.length - 1 && attempt < 3) {
+      upstreamIdx++;
+      continue;
+    }
 
     // Circuit breaker check
     if (bridgeState.circuitUntil > Date.now()) {
@@ -450,54 +615,45 @@ const fetchUpstream = async (url, options, reqCtx) => {
       if (res.ok) {
         stat.success++;
         bridgeState.consecutiveFailures = 0;
+        hs.consecutiveFailures = 0;
+        hs.healthy = true;
         return res;
       }
 
-      // Resposta não-OK: lê o corpo uma vez para classificar.
       const bodyText = await res.clone().text().catch(() => "");
       const reqId = parseUpstreamRequestId(bodyText);
       const retryableByText = isRetryableText(bodyText);
 
-      // Definitivo (4xx exceto 429) E não-retryável por texto → devolve ao cliente.
-      // Mas "no account is available / try again later" sobrepõe e força retry.
       if (isDefinitiveStatus(res.status) && !retryableByText) {
         stat.errors++;
         stat.lastError = `HTTP ${res.status}`;
         stat.lastErrorTs = new Date().toISOString();
         pushErrorLog({
           type: isDefinitiveText(bodyText) ? "client_error" : "upstream_error",
-          upstream: upstream.name,
-          upstreamId: upstream.id,
-          status: res.status,
-          message: bodyText.slice(0, 500),
-          upstreamRequestId: reqId,
-          apiKeyName: reqCtx.apiKeyName || null,
-          model: reqCtx.model || null,
-          route: reqCtx.route || null,
-          attempt: attempt + 1,
-          definitive: true,
+          upstream: upstream.name, upstreamId: upstream.id,
+          status: res.status, message: bodyText.slice(0, 500),
+          upstreamRequestId: reqId, apiKeyName: reqCtx.apiKeyName || null,
+          model: reqCtx.model || null, route: reqCtx.route || null,
+          attempt: attempt + 1, definitive: true,
         });
         return res;
       }
 
-      // Retryable (status retryável OU texto retryável)
+      // Retryable
       stat.errors++;
       stat.lastError = `HTTP ${res.status}`;
       stat.lastErrorTs = new Date().toISOString();
       bridgeState.consecutiveFailures++;
+      hs.consecutiveFailures++;
+      if (hs.consecutiveFailures >= 3) hs.healthy = false;
 
       pushErrorLog({
         type: "upstream_retry",
-        upstream: upstream.name,
-        upstreamId: upstream.id,
-        status: res.status,
-        message: bodyText.slice(0, 500),
-        upstreamRequestId: reqId,
-        apiKeyName: reqCtx.apiKeyName || null,
-        model: reqCtx.model || null,
-        route: reqCtx.route || null,
-        attempt: attempt + 1,
-        retryReason: retryableByText ? "retryable_text" : "retryable_status",
+        upstream: upstream.name, upstreamId: upstream.id,
+        status: res.status, message: bodyText.slice(0, 500),
+        upstreamRequestId: reqId, apiKeyName: reqCtx.apiKeyName || null,
+        model: reqCtx.model || null, route: reqCtx.route || null,
+        attempt: attempt + 1, retryReason: retryableByText ? "retryable_text" : "retryable_status",
       });
 
       if (bridgeState.consecutiveFailures >= (circuitCfg.failures || 3)) {
@@ -522,16 +678,15 @@ const fetchUpstream = async (url, options, reqCtx) => {
       stat.lastError = err.message;
       stat.lastErrorTs = new Date().toISOString();
       bridgeState.consecutiveFailures++;
+      hs.consecutiveFailures++;
+      if (hs.consecutiveFailures >= 3) hs.healthy = false;
 
       const isTimeout = err.name === "AbortError";
       pushErrorLog({
         type: isTimeout ? "timeout" : "network_error",
-        upstream: upstream.name,
-        upstreamId: upstream.id,
-        message: err.message,
-        apiKeyName: reqCtx.apiKeyName || null,
-        model: reqCtx.model || null,
-        route: reqCtx.route || null,
+        upstream: upstream.name, upstreamId: upstream.id,
+        message: err.message, apiKeyName: reqCtx.apiKeyName || null,
+        model: reqCtx.model || null, route: reqCtx.route || null,
         attempt: attempt + 1,
       });
 
@@ -554,7 +709,93 @@ const fetchUpstream = async (url, options, reqCtx) => {
     }
   }
 
-  throw new Error("Max retry attempts reached");
+  // ── Cross-vendor emergency fallback ──
+  const crossVendorUpstreams = sortByPriority(
+    allUpstreams.filter((u) => {
+      const v = u.vendor || "anthropic";
+      return v !== requestVendor && u.enabled !== false && getHealthState(u.id).healthy;
+    })
+  );
+
+  if (crossVendorUpstreams.length > 0) {
+    const fallbackUp = crossVendorUpstreams[0];
+    const fallbackModel = fallbackUp.fallbackModel || "gpt-5.5";
+    const stat = getUpstreamStat(fallbackUp.id);
+
+    pushErrorLog({
+      type: "cross_vendor_fallback",
+      upstream: fallbackUp.name, upstreamId: fallbackUp.id,
+      message: `All ${requestVendor} upstreams failed. Falling back to ${fallbackUp.vendor}/${fallbackModel}`,
+      apiKeyName: reqCtx.apiKeyName || null,
+      model: reqCtx.model || null, route: reqCtx.route || null,
+    });
+
+    // Convert request format if going from Anthropic → OpenAI
+    let fallbackUrl = url;
+    let fallbackOptions = { ...options };
+    const originalBody = JSON.parse(options.body || "{}");
+
+    if (requestVendor === "anthropic" && (fallbackUp.vendor === "openai")) {
+      fallbackUrl = "/v1/chat/completions";
+      const openaiBody = convertAnthropicRequestToOpenAI(originalBody, fallbackModel);
+      fallbackOptions.body = JSON.stringify(openaiBody);
+      fallbackOptions.headers = { ...fallbackOptions.headers, "content-type": "application/json" };
+      delete fallbackOptions.headers["anthropic-version"];
+    }
+
+    const targetUrl = fallbackUp.baseUrl + fallbackUrl;
+    const apiKey = (fallbackUp.apiKey || "").trim();
+    const headers = {
+      ...fallbackOptions.headers,
+      "x-api-key": apiKey,
+      Authorization: `Bearer ${apiKey}`,
+    };
+
+    stat.requests++;
+    stat.lastUsed = new Date().toISOString();
+
+    try {
+      await acquireUpstreamSlot();
+      let res;
+      try {
+        res = await fetchWithTimeout(targetUrl, { ...fallbackOptions, headers }, timeoutMs);
+      } finally {
+        releaseUpstreamSlot();
+      }
+
+      if (res.ok) {
+        stat.success++;
+        // Mark response as fallback so client knows
+        const originalRes = res;
+        // If we need to convert response format (OpenAI → Anthropic)
+        if (requestVendor === "anthropic" && fallbackUp.vendor === "openai") {
+          const openaiData = await res.json();
+          const anthropicData = convertOpenAIResponseToAnthropic(openaiData, reqCtx.model || "claude-opus-4-7");
+          anthropicData._bridge_fallback = true;
+          anthropicData._bridge_fallback_model = fallbackModel;
+          anthropicData._bridge_fallback_vendor = fallbackUp.vendor;
+          // Return a synthetic Response-like object
+          return {
+            ok: true,
+            status: 200,
+            headers: new Map([["x-bridge-fallback", "true"], ["x-bridge-fallback-model", fallbackModel]]),
+            json: async () => anthropicData,
+            text: async () => JSON.stringify(anthropicData),
+            clone: () => ({ text: async () => JSON.stringify(anthropicData), json: async () => anthropicData }),
+            body: null,
+            _isFallback: true,
+          };
+        }
+        return res;
+      }
+      stat.errors++;
+    } catch (err) {
+      releaseUpstreamSlot();
+      stat.errors++;
+    }
+  }
+
+  throw new Error("All upstreams failed (including cross-vendor fallback)");
 };
 
 // ============================================================
@@ -825,6 +1066,9 @@ app.post("/admin/setup", (req, res) => {
       baseUrl: String(u.baseUrl || "").replace(/\/$/, "").trim(),
       apiKey: String(u.apiKey || "").trim(),
       enabled: u.enabled !== false,
+      priority: Number(u.priority) || 10,
+      vendor: u.vendor || "anthropic",
+      fallbackModel: u.fallbackModel || null,
     }));
   }
   saveConfig(config);
@@ -857,6 +1101,9 @@ app.post("/admin/config", checkDashboardAuth, (req, res) => {
         baseUrl: String(u.baseUrl || "").replace(/\/$/, "").trim(),
         apiKey,
         enabled: u.enabled !== false,
+        priority: Number(u.priority) || (existing?.priority || 10),
+        vendor: u.vendor || (existing?.vendor || "anthropic"),
+        fallbackModel: u.fallbackModel || (existing?.fallbackModel || null),
       };
     });
     delete body.upstreams;
@@ -873,6 +1120,18 @@ app.get("/admin/status", checkDashboardAuth, (req, res) => {
   const now = Date.now();
   const activeUpstream = (getEnabledUpstreams()[0] || {}).name || "—";
   const gr = config.guardrails || {};
+
+  // Health state per upstream
+  const upstreamHealth = getEnabledUpstreams().map((u) => {
+    const hs = getHealthState(u.id);
+    const st = getUpstreamStat(u.id);
+    return {
+      id: u.id, name: u.name, priority: u.priority || 10, vendor: u.vendor || "anthropic",
+      healthy: hs.healthy, lastCheckAt: hs.lastCheckAt, lastCheckMs: hs.lastCheckMs,
+      consecutiveFailures: hs.consecutiveFailures,
+      requests: st.requests, success: st.success, errors: st.errors, lastUsed: st.lastUsed,
+    };
+  });
 
   // by_route no formato que o frontend espera (count/ok/err/avgMs)
   const byRoute = {};
@@ -949,7 +1208,8 @@ app.get("/admin/status", checkDashboardAuth, (req, res) => {
       upstream_retry_attempts: config.retry?.attempts,
       openclaw_force_non_stream_retry: config.openclawForceNonStreamRetry === true,
     },
-    versions: { node: process.version, bridge: "1.5.0-traceability" },
+    versions: { node: process.version, bridge: "2.0.0-smart-routing" },
+    upstream_health: upstreamHealth,
   });
 });
 
@@ -1109,7 +1369,7 @@ app.post("/v1/chat/completions", instrument("/v1/chat/completions"), checkAuth, 
         headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" },
         body: JSON.stringify(anthropicBody),
       },
-      { upstreams, route: "/v1/chat/completions", method: "POST", apiKeyName: req.apiKeyName, model: reqModel }
+      { upstreams, route: "/v1/chat/completions", method: "POST", apiKeyName: req.apiKeyName, model: reqModel, userId: req.headers["x-user-id"] || req.apiKeyName, requestVendor: "anthropic" }
     );
 
     if (!upstreamRes.ok) {
@@ -1149,7 +1409,7 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
     const upstreamRes = await fetchUpstream(
       "/v1/messages",
       { method: "POST", headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" }, body: JSON.stringify(body) },
-      { upstreams, route: "/v1/messages", method: "POST", apiKeyName: req.apiKeyName, model: reqModel }
+      { upstreams, route: "/v1/messages", method: "POST", apiKeyName: req.apiKeyName, model: reqModel, userId: req.headers["x-user-id"] || req.body.metadata?.user_id || req.apiKeyName, requestVendor: "anthropic" }
     );
     if (!upstreamRes.ok) {
       const errBody = await upstreamRes.text().catch(() => "");
@@ -1157,6 +1417,11 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
       return res.status(upstreamRes.status).json({ error: { message: errBody } });
     }
     touchApiKey(req.apiKeyObj, false);
+    // Cross-vendor fallback headers
+    if (upstreamRes._isFallback) {
+      res.setHeader("x-bridge-fallback", "true");
+      res.setHeader("x-bridge-fallback-model", upstreamRes.headers?.get?.("x-bridge-fallback-model") || "unknown");
+    }
     if (isStream && !forceNonStream) {
       copyAnthropicHeaders(upstreamRes, res);
       await sendUpstreamResponse(upstreamRes, res);
@@ -1182,7 +1447,9 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
 // 15. START SERVER
 // ============================================================
 app.listen(PORT, () => {
-  console.log(`Claude Bridge v1.4.0-config-ui listening on port ${PORT}`);
+  console.log(`Claude Bridge v2.0.0-smart-routing listening on port ${PORT}`);
   console.log(`Config path: ${CONFIG_PATH}`);
   console.log(`Configured: ${isConfigured()}`);
+  console.log(`Upstreams: ${getEnabledUpstreams().length} enabled`);
+  startHealthCheckLoop();
 });
