@@ -10,18 +10,16 @@
 </head>
 <body>
   <div class="header">
-    <h1>⚡ ClaudBridge</h1>
+    <div class="logo">⚡ <span>ClaudBridge</span></div>
     <nav>
       <a href="/portal/">Início</a>
       <a href="/portal/login.html">Login</a>
     </nav>
   </div>
-  <div class="container" style="max-width:440px;margin-top:4rem">
-    <div class="card" style="padding:2.5rem">
-      <h2 style="text-align:center;margin-bottom:0.5rem">Criar conta</h2>
-      <p style="text-align:center;color:var(--text2);margin-bottom:2rem;font-size:0.9rem">
-        Comece a usar a API em minutos
-      </p>
+  <div class="auth-wrapper">
+    <div class="auth-card">
+      <h2>Criar conta</h2>
+      <p class="subtitle">Comece a usar a API em minutos</p>
       <div id="error" class="alert alert-error hidden"></div>
       <form id="registerForm">
         <div class="form-group">
@@ -36,11 +34,9 @@
           <label>Senha</label>
           <input type="password" id="password" placeholder="Mínimo 6 caracteres" required minlength="6">
         </div>
-        <button type="submit" class="btn" style="width:100%;margin-top:0.5rem">
-          Criar conta
-        </button>
+        <button type="submit" class="btn" style="width:100%;margin-top:0.5rem">Criar conta</button>
       </form>
-      <p style="text-align:center;margin-top:1.5rem;font-size:0.9rem;color:var(--text2)">
+      <p style="text-align:center;margin-top:1.5rem;font-size:0.875rem;color:var(--text2)">
         Já tem conta? <a href="/portal/login.html">Entrar</a>
       </p>
     </div>

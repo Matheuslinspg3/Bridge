@@ -10,7 +10,7 @@
 </head>
 <body>
   <div class="header">
-    <h1>⚡ ClaudBridge</h1>
+    <div class="logo">⚡ <span>ClaudBridge</span></div>
     <nav>
       <a href="/portal/">Início</a>
       <a href="/portal/dashboard.html">Dashboard</a>
@@ -18,8 +18,10 @@
     </nav>
   </div>
   <div class="container">
-    <h2 style="margin-bottom:0.5rem; font-weight:800">Meu Painel</h2>
-    <p style="color:var(--text2); margin-bottom:2rem" id="welcomeMsg">Bem-vindo de volta</p>
+    <div style="margin-bottom:2rem">
+      <h2 style="font-weight:800;font-size:1.6rem;letter-spacing:-0.02em">Meu Painel</h2>
+      <p style="color:var(--text2);font-size:0.9rem;margin-top:0.3rem" id="welcomeMsg">Bem-vindo de volta</p>
+    </div>
 
     <div id="loading" class="card" style="text-align:center;padding:3rem">
       <p style="color:var(--text2)">Carregando...</p>
@@ -54,16 +56,14 @@
 
         <!-- Usage bars -->
         <div style="margin-top:1.5rem">
-          <div style="display:flex;justify-content:space-between;font-size:0.85rem;color:var(--text2)">
-            <span>Uso diário</span>
-            <span id="dailyPct">0%</span>
+          <div style="display:flex;justify-content:space-between;font-size:0.825rem;color:var(--text2)">
+            <span>Uso diário</span><span id="dailyPct">0%</span>
           </div>
           <div class="usage-bar"><div class="usage-bar-fill" id="dailyBar" style="width:0%"></div></div>
         </div>
         <div style="margin-top:1rem">
-          <div style="display:flex;justify-content:space-between;font-size:0.85rem;color:var(--text2)">
-            <span>Uso mensal</span>
-            <span id="monthlyPct">0%</span>
+          <div style="display:flex;justify-content:space-between;font-size:0.825rem;color:var(--text2)">
+            <span>Uso mensal</span><span id="monthlyPct">0%</span>
           </div>
           <div class="usage-bar"><div class="usage-bar-fill" id="monthlyBar" style="width:0%"></div></div>
         </div>
@@ -74,23 +74,23 @@
           <span id="apiKeyValue" style="flex:1"></span>
           <button class="copy-btn" onclick="copyKey()">Copiar</button>
         </div>
-        <p style="color:var(--text3);font-size:0.8rem;margin-top:0.6rem">
+        <p style="color:var(--text3);font-size:0.75rem;margin-top:0.6rem">
           Use como <code>Bearer</code> token ou <code>x-api-key</code>. Compatível com SDK OpenAI e Anthropic.
         </p>
 
         <!-- Quick connect -->
         <div style="margin-top:1.5rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem">
-          <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:1rem">
-            <p style="font-size:0.8rem;color:var(--text3);margin-bottom:0.5rem">Python (Anthropic SDK)</p>
-            <pre style="font-size:0.75rem;color:var(--text2);overflow-x:auto">import anthropic
+          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-xs);padding:1rem">
+            <p style="font-size:0.75rem;color:var(--text3);margin-bottom:0.5rem">Python (Anthropic SDK)</p>
+            <pre style="font-size:0.725rem;color:var(--text2);overflow-x:auto">import anthropic
 client = anthropic.Anthropic(
     base_url="<span class="base-url-slot"></span>",
     api_key="SUA_KEY"
 )</pre>
           </div>
-          <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:1rem">
-            <p style="font-size:0.8rem;color:var(--text3);margin-bottom:0.5rem">Cursor / Claude Code</p>
-            <pre style="font-size:0.75rem;color:var(--text2);overflow-x:auto">export ANTHROPIC_BASE_URL="<span class="base-url-slot"></span>"
+          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-xs);padding:1rem">
+            <p style="font-size:0.75rem;color:var(--text3);margin-bottom:0.5rem">Cursor / Claude Code</p>
+            <pre style="font-size:0.725rem;color:var(--text2);overflow-x:auto">export ANTHROPIC_BASE_URL="<span class="base-url-slot"></span>"
 export ANTHROPIC_API_KEY="SUA_KEY"
 claude</pre>
           </div>
@@ -111,20 +111,20 @@ claude</pre>
           <div class="plan-card" style="padding:1.8rem">
             <h3>Pro 5x</h3>
             <div class="price" style="font-size:1.6rem">R$124,99</div>
-            <p style="color:var(--text2);font-size:0.85rem;margin:0.5rem 0 1rem">35M tokens · 15 RPM</p>
+            <p style="color:var(--text2);font-size:0.825rem;margin:0.5rem 0 1rem">35M tokens · 15 RPM</p>
             <button class="btn btn-sm" onclick="orderPlan('pro5x')">Pagar via PIX</button>
           </div>
           <div class="plan-card featured" style="padding:1.8rem">
             <span class="plan-badge">Popular</span>
             <h3>Max 10x</h3>
             <div class="price" style="font-size:1.6rem">R$249,99</div>
-            <p style="color:var(--text2);font-size:0.85rem;margin:0.5rem 0 1rem">90M tokens · 25 RPM</p>
+            <p style="color:var(--text2);font-size:0.825rem;margin:0.5rem 0 1rem">90M tokens · 25 RPM</p>
             <button class="btn btn-sm" onclick="orderPlan('max10x')">Pagar via PIX</button>
           </div>
           <div class="plan-card" style="padding:1.8rem">
             <h3>Max 20x</h3>
             <div class="price" style="font-size:1.6rem">R$499,99</div>
-            <p style="color:var(--text2);font-size:0.85rem;margin:0.5rem 0 1rem">225M tokens · 40 RPM</p>
+            <p style="color:var(--text2);font-size:0.825rem;margin:0.5rem 0 1rem">225M tokens · 40 RPM</p>
             <button class="btn btn-sm" onclick="orderPlan('max20x')">Pagar via PIX</button>
           </div>
         </div>
@@ -133,12 +133,10 @@ claude</pre>
       <!-- PIX Modal -->
       <div id="pixModal" class="card hidden fade-in">
         <h3>📱 Pagamento PIX</h3>
-        <p style="color:var(--text2);font-size:0.9rem;margin-bottom:1rem">Escaneie o QR ou copie o código abaixo</p>
+        <p style="color:var(--text2);font-size:0.875rem;margin-bottom:1rem">Escaneie o QR ou copie o código abaixo</p>
         <div class="qr-container">
           <img id="pixQR" src="" alt="QR Code PIX">
-          <div class="pix-code">
-            <span id="pixPayload"></span>
-          </div>
+          <div class="pix-code"><span id="pixPayload"></span></div>
           <button class="btn btn-sm" onclick="copyPix()" style="margin-top:1rem">📋 Copiar código PIX</button>
         </div>
         <div class="alert alert-warning" style="margin-top:1.5rem;text-align:center">
@@ -154,9 +152,7 @@ claude</pre>
     </div>
   </div>
 
-  <div class="footer">
-    <p>© 2026 ClaudBridge</p>
-  </div>
+  <div class="footer"><p>© 2026 ClaudBridge</p></div>
 
   <script src="portal.js"></script>
   <script>
@@ -186,7 +182,6 @@ claude</pre>
         document.getElementById('monthlyLimit').textContent = formatNum(limit);
         document.getElementById('expiresAt').textContent = new Date(data.subscription.expires_at).toLocaleDateString('pt-BR');
 
-        // Usage bars
         const dailyPct = Math.min(100, (daily / budgetDay) * 100);
         const monthlyPct = Math.min(100, (monthly / limit) * 100);
         document.getElementById('dailyPct').textContent = dailyPct.toFixed(0) + '%';
@@ -203,7 +198,6 @@ claude</pre>
         document.getElementById('noSubSection').classList.remove('hidden');
       }
 
-      // Orders
       const ordersRes = await apiFetch('/portal/orders');
       if (ordersRes.ok) {
         const orders = await ordersRes.json();
@@ -211,7 +205,7 @@ claude</pre>
           <div class="order-item">
             <div>
               <span style="font-weight:600">${o.plan_id}</span>
-              <span style="color:var(--text3);font-size:0.85rem;margin-left:0.5rem">R$ ${o.amount_brl.toFixed(2)}</span>
+              <span style="color:var(--text3);font-size:0.825rem;margin-left:0.5rem">R$ ${o.amount_brl.toFixed(2)}</span>
             </div>
             <span class="order-status ${o.status}">${o.status === 'confirmed' ? '✅ Confirmado' : o.status === 'rejected' ? '❌ Rejeitado' : '⏳ Pendente'}</span>
           </div>
