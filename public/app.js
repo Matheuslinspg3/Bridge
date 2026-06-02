@@ -306,6 +306,114 @@ function openErrorModal(error) {
 }
 function closeErrorModal() { $("#errorModal").classList.add("hidden"); }
 
+/* ---- Connect panel ---- */
+let _connectProvider = "n8n";
+let _connectBaseUrl = "";
+let _connectModel = "";
+
+function renderConnectPanel() {
+  const base = _connectBaseUrl || window.location.origin;
+  const key  = getToken() || "<sua-senha>";
+  const model = _connectModel || "claude-opus-4-7";
+  const providers = {
+    n8n: {
+      label: "n8n",
+      rows: [
+        { label: "Tipo de credencial", value: "OpenAI API" },
+        { label: "Base URL", value: `${base}/v1` },
+        { label: "API Key", value: key },
+        { label: "Nó recomendado", value: "OpenAI Chat Model" },
+        { label: "Model (by ID)", value: model },
+      ],
+      note: "Em Credentials → OpenAI API, preencha Base URL e API Key acima. No nó, selecione <b>Define Below</b> e cole o Model."
+    },
+    openai: {
+      label: "OpenAI compat",
+      rows: [
+        { label: "Base URL", value: `${base}/v1` },
+        { label: "API Key", value: key },
+        { label: "Model", value: model },
+      ],
+      code: `from openai import OpenAI\nclient = OpenAI(\n    base_url="${base}/v1",\n    api_key="${key}",\n)\nresp = client.chat.completions.create(\n    model="${model}",\n    messages=[{"role":"user","content":"Olá!"}]\n)`,
+      note: "Funciona com qualquer SDK OpenAI (Python, Node, Go, etc.) — só troque a <b>base_url</b> e a <b>api_key</b>."
+    },
+    anthropic: {
+      label: "Anthropic compat",
+      rows: [
+        { label: "Base URL", value: `${base}` },
+        { label: "API Key (x-api-key)", value: key },
+        { label: "Model", value: model },
+      ],
+      code: `import anthropic\nclient = anthropic.Anthropic(\n    base_url="${base}",\n    api_key="${key}",\n)\nmsg = client.messages.create(\n    model="${model}",\n    max_tokens=1024,\n    messages=[{"role":"user","content":"Olá!"}]\n)`,
+      note: "Use o endpoint <code>/v1/messages</code>. Funciona com o SDK oficial da Anthropic."
+    },
+    openclaw: {
+      label: "OpenClaw",
+      rows: [
+        { label: "baseUrl", value: base },
+        { label: "apiKey", value: key },
+        { label: "api", value: "anthropic-messages" },
+        { label: "model id", value: model },
+      ],
+      code: `openclaw config set models.providers.bridge '{\n  "baseUrl": "${base}",\n  "apiKey":  "${key}",\n  "api":     "anthropic-messages",\n  "models": [{"id":"${model}","name":"Claude via Bridge","reasoning":true,"input":["text","image"],"contextWindow":200000,"maxTokens":8192}]\n}' --strict-json --replace`,
+      note: "Cole o comando acima no terminal com o OpenClaw CLI instalado."
+    },
+    cursor: {
+      label: "Cursor / VS Code",
+      rows: [
+        { label: "Provider", value: "OpenAI Compatible" },
+        { label: "Base URL", value: `${base}/v1` },
+        { label: "API Key", value: key },
+        { label: "Model", value: model },
+      ],
+      note: "Em Cursor: <b>Settings → Models → Add Model</b>. Selecione <b>openai-compatible</b>, cole a Base URL e a API Key. Em VS Code com Copilot, adicione em <code>settings.json</code>:<br><code>\"github.copilot.advanced\": {\"debug.overrideEngine\": \"${model}\", \"debug.overrideChatEngine\": \"${model}\"}</code>"
+    }
+  };
+
+  const p = providers[_connectProvider] || providers.n8n;
+  const baseEl = $("#connectBaseUrl");
+  if (baseEl) baseEl.textContent = base;
+
+  const panel = $("#connectPanel");
+  if (!panel) return;
+
+  const rowsHtml = p.rows.map(r => `
+    <div class="connect-row" title="Clique para copiar" onclick="copyText(this,'${escAttr(r.value)}')">
+      <span class="connect-row-label">${r.label}</span>
+      <span class="connect-row-value"><code>${escHtml(r.value)}</code></span>
+      <span class="connect-copy-icon">⧉</span>
+    </div>`).join("");
+
+  const codeHtml = p.code ? `
+    <div class="connect-code-wrap">
+      <button class="connect-copy-btn" onclick="copyText(this,${JSON.stringify(p.code)})">Copiar código</button>
+      <pre class="codeblock" style="margin-top:8px">${escHtml(p.code)}</pre>
+    </div>` : "";
+
+  panel.innerHTML = `
+    <div class="connect-rows">${rowsHtml}</div>
+    ${codeHtml}
+    <p class="muted small connect-note" style="margin:10px 0 0">${p.note}</p>`;
+}
+
+function escAttr(s) { return String(s).replace(/'/g, "\\'"); }
+
+window.copyText = function(el, text) {
+  navigator.clipboard.writeText(text).catch(() => {});
+  const orig = el.querySelector(".connect-copy-icon");
+  if (orig) { orig.textContent = "✓"; setTimeout(() => orig.textContent = "⧉", 1500); }
+  else { const prev = el.textContent; el.textContent = "✓ Copiado!"; setTimeout(() => el.textContent = prev, 1500); }
+};
+
+document.querySelectorAll(".connect-tab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".connect-tab").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    _connectProvider = btn.dataset.provider;
+    renderConnectPanel();
+  });
+});
+
 /* ---- Main refresh ---- */
 async function refresh() {
   try {
@@ -322,6 +430,9 @@ async function refresh() {
     renderBudget(data.guardrails.budget);
     renderModelSwaps(data.guardrails.model_swap);
     renderConfig(data.config, data.versions);
+    _connectModel = data.config?.defaultModel || "claude-opus-4-7";
+    _connectBaseUrl = window.location.origin;
+    renderConnectPanel();
   } catch(e) { console.error("[refresh]", e); }
 }
 

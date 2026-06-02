@@ -146,24 +146,21 @@
       </div>
     </section>
 
-    <section class="grid grid-2">
+    <section class="grid">
       <div class="card">
-        <h3>Como usar no n8n</h3>
-<pre class="codeblock">Credential OpenAI:
-  API Key:  [PROXY_API_KEY]
-  Base URL: https://&lt;seu-host&gt;/v1
-Node OpenAI Chat Model:
-  Model: By ID
-  Value: claude-opus-4-7</pre>
-      </div>
-      <div class="card">
-        <h3>Como usar no OpenClaw</h3>
-<pre class="codeblock">openclaw config set models.providers.claudee '{
-  "baseUrl": "https://&lt;seu-host&gt;",
-  "apiKey":  "[PROXY_API_KEY]",
-  "api":     "anthropic-messages",
-  "models": [{"id":"claude-opus-4-7","name":"Claude Opus 4.7","reasoning":true,"input":["text","image"],"contextWindow":200000,"maxTokens":8192}]
-}' --strict-json --replace</pre>
+        <div class="card-header-row">
+          <h3>&#128279; Como conectar</h3>
+          <span id="connectBaseUrl" class="muted small"></span>
+        </div>
+        <p class="muted small" style="margin:0 0 12px 0">A senha do bridge serve como API key em todos os provedores abaixo. Clique em qualquer campo para copiar.</p>
+        <div class="connect-tabs">
+          <button class="connect-tab active" data-provider="n8n">n8n</button>
+          <button class="connect-tab" data-provider="openai">OpenAI compat</button>
+          <button class="connect-tab" data-provider="anthropic">Anthropic compat</button>
+          <button class="connect-tab" data-provider="openclaw">OpenClaw</button>
+          <button class="connect-tab" data-provider="cursor">Cursor / VS Code</button>
+        </div>
+        <div id="connectPanel" class="connect-panel"></div>
       </div>
     </section>
 
