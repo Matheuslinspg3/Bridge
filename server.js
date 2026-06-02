@@ -47,13 +47,19 @@ const murmurhash3 = (str, seed = 0) => {
 // 3. CONFIG PERSISTENCE
 // ============================================================
 const CONFIG_PATH = (() => {
-  // Prefere /app (volume persistente no Docker).
-  // Verifica se o DIRETÓRIO é gravável, não o arquivo (que pode não existir ainda).
+  // Prefere /data (volume persistente no Docker/EasyPanel).
+  // /data sobrevive redeploy — config nunca se perde.
   try {
-    fs.accessSync("/app", fs.constants.W_OK);
-    return "/app/config.json";
+    fs.accessSync("/data", fs.constants.W_OK);
+    return "/data/config.json";
   } catch {
-    return path.join(__dirname, "config.json");
+    // Fallback: /app (dev local ou container sem volume)
+    try {
+      fs.accessSync("/app", fs.constants.W_OK);
+      return "/app/config.json";
+    } catch {
+      return path.join(__dirname, "config.json");
+    }
   }
 })();
 
