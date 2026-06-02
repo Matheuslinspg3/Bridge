@@ -67,10 +67,8 @@ init();
 /* ---- Setup handlers ---- */
 $("#setupNext1Btn").addEventListener("click", () => {
   const pass = $("#setupDashPass").value.trim();
-  const key = $("#setupProxyKey").value.trim();
   const err = $("#setupError");
   if (!pass) { err.textContent = "Senha obrigatória."; err.classList.remove("hidden"); return; }
-  if (!key) { err.textContent = "PROXY_API_KEY obrigatória."; err.classList.remove("hidden"); return; }
   err.classList.add("hidden");
   $("#setupStep1").classList.add("hidden");
   $("#setupStep2").classList.remove("hidden");
@@ -94,7 +92,6 @@ $("#setupFinishBtn").addEventListener("click", async () => {
       headers: {"Content-Type":"application/json"},
       body: JSON.stringify({
         dashboardPassword: $("#setupDashPass").value.trim(),
-        proxyApiKey: $("#setupProxyKey").value.trim(),
         upstreams: [{name, baseUrl, apiKey}]
       })
     });
@@ -398,7 +395,6 @@ let _cfg = null;
 async function refreshSettings() {
   _cfg = await fetchConfig();
   renderUpstreamsList(_cfg.upstreams || []);
-  $("#cfgProxyKey").value = "";
   $("#cfgDefaultModel").value = _cfg.defaultModel || "";
   $("#cfgInfiniteRetry").checked = _cfg.retry?.infinite !== false;
   $("#cfgMaxDelay").value = _cfg.retry?.maxDelayMs || 20000;
@@ -495,8 +491,6 @@ $("#saveBridgeCfgBtn").addEventListener("click", async () => {
     concurrency: { maxConcurrency: Number($("#cfgMaxConc").value), minIntervalMs: Number($("#cfgMinInterval").value), timeoutMs: Number($("#cfgTimeout").value) },
     circuit: { failures: Number($("#cfgCircuitFail").value), cooldownMs: Number($("#cfgCircuitCool").value) }
   };
-  const pk = $("#cfgProxyKey").value.trim();
-  if (pk) data.proxyApiKey = pk;
   await postConfig(data);
   $("#bridgeCfgMsg").textContent = "Salvo!";
   setTimeout(() => { $("#bridgeCfgMsg").textContent = ""; }, 3000);

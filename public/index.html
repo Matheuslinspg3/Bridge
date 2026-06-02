@@ -14,11 +14,9 @@
       <h1>&#9889; Claude Bridge &mdash; Configura&#231;&#227;o inicial</h1>
       <p class="muted">Configure o bridge pela primeira vez.</p>
       <div id="setupStep1">
-        <h4>Passo 1 &mdash; Credenciais</h4>
-        <label>Senha do painel</label>
-        <input id="setupDashPass" type="password" placeholder="Senha para acessar este dashboard" />
-        <label>PROXY_API_KEY (chave que os clientes usar&#227;o)</label>
-        <input id="setupProxyKey" type="text" placeholder="ex: sk-bridge-..." />
+        <h4>Passo 1 &mdash; Senha &#250;nica</h4>
+        <label>Senha (usada para o dashboard E como API key do bridge)</label>
+        <input id="setupDashPass" type="password" placeholder="ex: sk-bridge-minha-senha-forte" />
         <button id="setupNext1Btn">Pr&#243;ximo &#8594;</button>
       </div>
       <div id="setupStep2" class="hidden">
@@ -195,7 +193,6 @@ Node OpenAI Chat Model:
     <section class="grid grid-2">
       <div class="card">
         <h3>Bridge</h3>
-        <div class="form-row"><label>PROXY_API_KEY</label><input type="password" id="cfgProxyKey" /></div>
         <div class="form-row"><label>Modelo padr&#227;o</label><input type="text" id="cfgDefaultModel" /></div>
         <div class="form-row"><label>Retry infinito</label><label class="toggle-wrap"><input type="checkbox" id="cfgInfiniteRetry" class="toggle-input" /><span class="toggle-pill"></span></label></div>
         <div class="form-row"><label>Max delay (ms)</label><input type="number" id="cfgMaxDelay" /></div>

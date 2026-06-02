@@ -43,7 +43,6 @@ const CONFIG_PATH = (() => {
 
 const DEFAULT_CONFIG = {
   dashboardPassword: "admin",
-  proxyApiKey: "",
   defaultModel: "claude-opus-4-7",
   upstreams: [],
   retry: { infinite: true, attempts: 5, baseDelayMs: 1000, maxDelayMs: 20000, jitterMs: 750 },
@@ -87,7 +86,7 @@ const saveConfig = (cfg) => {
 let config = loadConfig();
 
 const isConfigured = () =>
-  config.upstreams.length > 0 && !!config.proxyApiKey && !!config.dashboardPassword;
+  config.upstreams.length > 0 && !!config.dashboardPassword;
 
 const getEnabledUpstreams = () =>
   (config.upstreams || []).filter((u) => u.enabled !== false);
@@ -484,15 +483,14 @@ const fetchUpstream = async (url, options, reqCtx) => {
 // 12. AUTH MIDDLEWARE
 // ============================================================
 const checkAuth = (req, res, next) => {
-  // Se proxyApiKey não foi configurada ainda, bloqueia com 503
-  if (!config.proxyApiKey) {
-    return res.status(503).json({ error: { message: "Bridge not configured — set PROXY_API_KEY in the dashboard", type: "not_configured" } });
+  if (!config.dashboardPassword) {
+    return res.status(503).json({ error: { message: "Bridge not configured — set a password in the dashboard", type: "not_configured" } });
   }
   const auth = req.headers["authorization"] || "";
   const key = (auth.startsWith("Bearer ") ? auth.slice(7) : req.headers["x-api-key"] || "").trim();
-  const expected = config.proxyApiKey.trim();
+  const expected = config.dashboardPassword.trim();
   if (key !== expected) {
-    console.warn(`[auth] 401 — received "${key.slice(0, 12)}..." expected "${expected.slice(0, 12)}..." (len recv=${key.length} exp=${expected.length})`);
+    console.warn('[auth] 401 — key mismatch (len recv=' + key.length + ' exp=' + expected.length + ')');
     return res.status(401).json({ error: { message: "Invalid API key", type: "invalid_request_error" } });
   }
   next();
@@ -718,7 +716,6 @@ app.get("/admin/setup-status", (req, res) => {
   res.json({
     configured: isConfigured(),
     upstreamCount: config.upstreams.length,
-    hasProxyKey: !!config.proxyApiKey,
     hasDashboardPassword: !!config.dashboardPassword,
   });
 });
@@ -731,9 +728,8 @@ app.post("/admin/setup", (req, res) => {
       return res.status(401).json({ error: "Already configured. Provide dashboard auth." });
     }
   }
-  const { dashboardPassword, proxyApiKey, upstreams } = req.body || {};
+  const { dashboardPassword, upstreams } = req.body || {};
   if (dashboardPassword) config.dashboardPassword = String(dashboardPassword).trim();
-  if (proxyApiKey) config.proxyApiKey = String(proxyApiKey).trim();
   if (Array.isArray(upstreams)) {
     config.upstreams = upstreams.map((u) => ({
       id: u.id || genId(),
@@ -751,7 +747,6 @@ app.post("/admin/setup", (req, res) => {
 app.get("/admin/config", checkDashboardAuth, (req, res) => {
   const masked = {
     ...config,
-    proxyApiKey: maskKey(config.proxyApiKey),
     dashboardPassword: maskKey(config.dashboardPassword),
     upstreams: config.upstreams.map((u) => ({ ...u, apiKey: maskKey(u.apiKey) })),
   };
@@ -777,9 +772,7 @@ app.post("/admin/config", checkDashboardAuth, (req, res) => {
     });
     delete body.upstreams;
   }
-  if (body.proxyApiKey && body.proxyApiKey.includes("...")) delete body.proxyApiKey;
   if (body.dashboardPassword && body.dashboardPassword.includes("...")) delete body.dashboardPassword;
-  if (body.proxyApiKey) body.proxyApiKey = String(body.proxyApiKey).trim();
   if (body.dashboardPassword) body.dashboardPassword = String(body.dashboardPassword).trim();
   config = deepMerge(config, body);
   saveConfig(config);
@@ -804,7 +797,6 @@ app.get("/admin/status", checkDashboardAuth, (req, res) => {
     metrics,
     config: {
       ...config,
-      proxyApiKey: maskKey(config.proxyApiKey),
       dashboardPassword: maskKey(config.dashboardPassword),
       upstreams: config.upstreams.map((u) => ({ ...u, apiKey: maskKey(u.apiKey) })),
     },
