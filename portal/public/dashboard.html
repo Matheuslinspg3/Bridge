@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dashboard - ClaudBridge</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="portal.css">
 </head>
 <body>
@@ -16,92 +18,154 @@
     </nav>
   </div>
   <div class="container">
-    <h2 style="margin-bottom:1.5rem">Meu Painel</h2>
-    <div id="loading">Carregando...</div>
-    <div id="content" class="hidden">
-      <!-- Subscription info -->
+    <h2 style="margin-bottom:0.5rem; font-weight:800">Meu Painel</h2>
+    <p style="color:var(--text2); margin-bottom:2rem" id="welcomeMsg">Bem-vindo de volta</p>
+
+    <div id="loading" class="card" style="text-align:center;padding:3rem">
+      <p style="color:var(--text2)">Carregando...</p>
+    </div>
+
+    <div id="content" class="hidden fade-in">
+      <!-- Active subscription -->
       <div id="subSection" class="card hidden">
-        <h3>Plano Ativo: <span id="planName"></span></h3>
-        <div class="stats-grid">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:1rem">
+          <h3 style="margin:0">Plano: <span id="planName" style="color:var(--accent2)"></span></h3>
+          <span class="pill pill-ok" id="planStatus">Ativo</span>
+        </div>
+
+        <div class="stats-grid" style="margin-top:1.5rem">
           <div class="stat-card">
             <div class="value" id="dailyUsage">0</div>
             <div class="label">Tokens hoje</div>
           </div>
           <div class="stat-card">
             <div class="value" id="monthlyUsage">0</div>
-            <div class="label">Tokens este mês</div>
+            <div class="label">Este mês</div>
           </div>
           <div class="stat-card">
             <div class="value" id="monthlyLimit">0</div>
             <div class="label">Limite mensal</div>
           </div>
           <div class="stat-card">
-            <div class="value" id="expiresAt">-</div>
+            <div class="value" id="expiresAt">—</div>
             <div class="label">Expira em</div>
           </div>
         </div>
-        <h3 style="margin-top:1.5rem">Sua API Key</h3>
+
+        <!-- Usage bars -->
+        <div style="margin-top:1.5rem">
+          <div style="display:flex;justify-content:space-between;font-size:0.85rem;color:var(--text2)">
+            <span>Uso diário</span>
+            <span id="dailyPct">0%</span>
+          </div>
+          <div class="usage-bar"><div class="usage-bar-fill" id="dailyBar" style="width:0%"></div></div>
+        </div>
+        <div style="margin-top:1rem">
+          <div style="display:flex;justify-content:space-between;font-size:0.85rem;color:var(--text2)">
+            <span>Uso mensal</span>
+            <span id="monthlyPct">0%</span>
+          </div>
+          <div class="usage-bar"><div class="usage-bar-fill" id="monthlyBar" style="width:0%"></div></div>
+        </div>
+
+        <!-- API Key -->
+        <h3 style="margin-top:2rem">Sua API Key</h3>
         <div class="api-key-box">
-          <span id="apiKeyValue"></span>
+          <span id="apiKeyValue" style="flex:1"></span>
           <button class="copy-btn" onclick="copyKey()">Copiar</button>
         </div>
-        <p style="color:var(--text2);font-size:0.8rem;margin-top:0.5rem">
-          Use como Bearer token ou x-api-key. Compatível com OpenAI e Anthropic SDK.
+        <p style="color:var(--text3);font-size:0.8rem;margin-top:0.6rem">
+          Use como <code>Bearer</code> token ou <code>x-api-key</code>. Compatível com SDK OpenAI e Anthropic.
         </p>
+
+        <!-- Quick connect -->
+        <div style="margin-top:1.5rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem">
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:1rem">
+            <p style="font-size:0.8rem;color:var(--text3);margin-bottom:0.5rem">Python (Anthropic SDK)</p>
+            <pre style="font-size:0.75rem;color:var(--text2);overflow-x:auto">import anthropic
+client = anthropic.Anthropic(
+    base_url="<span class="base-url-slot"></span>",
+    api_key="SUA_KEY"
+)</pre>
+          </div>
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:1rem">
+            <p style="font-size:0.8rem;color:var(--text3);margin-bottom:0.5rem">Cursor / Claude Code</p>
+            <pre style="font-size:0.75rem;color:var(--text2);overflow-x:auto">export ANTHROPIC_BASE_URL="<span class="base-url-slot"></span>"
+export ANTHROPIC_API_KEY="SUA_KEY"
+claude</pre>
+          </div>
+        </div>
       </div>
 
       <!-- No subscription -->
-      <div id="noSubSection" class="card hidden">
+      <div id="noSubSection" class="card hidden" style="text-align:center;padding:3rem">
+        <div style="font-size:3rem;margin-bottom:1rem">🚀</div>
         <h3>Nenhum plano ativo</h3>
-        <p style="color:var(--text2)">Escolha um plano abaixo para começar a usar a API.</p>
+        <p style="color:var(--text2);margin:0.5rem 0 1.5rem">Escolha um plano abaixo para começar a usar a API.</p>
       </div>
 
       <!-- Plan selection -->
       <div id="planSelection" class="card">
-        <h3>Assinar / Renovar Plano</h3>
+        <h3>Assinar / Renovar</h3>
         <div class="plans-grid" style="margin-top:1rem">
-          <div class="plan-card" style="padding:1.5rem">
+          <div class="plan-card" style="padding:1.8rem">
             <h3>Pro 5x</h3>
-            <div class="price" style="font-size:1.5rem">R$ 124,99</div>
+            <div class="price" style="font-size:1.6rem">R$124,99</div>
+            <p style="color:var(--text2);font-size:0.85rem;margin:0.5rem 0 1rem">35M tokens · 15 RPM</p>
             <button class="btn btn-sm" onclick="orderPlan('pro5x')">Pagar via PIX</button>
           </div>
-          <div class="plan-card" style="padding:1.5rem">
+          <div class="plan-card featured" style="padding:1.8rem">
+            <span class="plan-badge">Popular</span>
             <h3>Max 10x</h3>
-            <div class="price" style="font-size:1.5rem">R$ 249,99</div>
+            <div class="price" style="font-size:1.6rem">R$249,99</div>
+            <p style="color:var(--text2);font-size:0.85rem;margin:0.5rem 0 1rem">90M tokens · 25 RPM</p>
             <button class="btn btn-sm" onclick="orderPlan('max10x')">Pagar via PIX</button>
           </div>
-          <div class="plan-card" style="padding:1.5rem">
+          <div class="plan-card" style="padding:1.8rem">
             <h3>Max 20x</h3>
-            <div class="price" style="font-size:1.5rem">R$ 499,99</div>
+            <div class="price" style="font-size:1.6rem">R$499,99</div>
+            <p style="color:var(--text2);font-size:0.85rem;margin:0.5rem 0 1rem">225M tokens · 40 RPM</p>
             <button class="btn btn-sm" onclick="orderPlan('max20x')">Pagar via PIX</button>
           </div>
         </div>
       </div>
 
-      <!-- PIX payment modal -->
-      <div id="pixModal" class="card hidden">
+      <!-- PIX Modal -->
+      <div id="pixModal" class="card hidden fade-in">
         <h3>📱 Pagamento PIX</h3>
+        <p style="color:var(--text2);font-size:0.9rem;margin-bottom:1rem">Escaneie o QR ou copie o código abaixo</p>
         <div class="qr-container">
           <img id="pixQR" src="" alt="QR Code PIX">
-          <p class="pix-code">Cópia e cola: <span id="pixPayload"></span></p>
-          <button class="btn btn-sm" onclick="copyPix()" style="margin-top:0.5rem">Copiar código PIX</button>
+          <div class="pix-code">
+            <span id="pixPayload"></span>
+          </div>
+          <button class="btn btn-sm" onclick="copyPix()" style="margin-top:1rem">📋 Copiar código PIX</button>
         </div>
-        <p style="color:var(--text2);font-size:0.85rem;margin-top:1rem;text-align:center">
-          Após o pagamento, sua key será ativada em até 24h (normalmente minutos).
-        </p>
+        <div class="alert alert-warning" style="margin-top:1.5rem;text-align:center">
+          ⏳ Após o pagamento, sua key será ativada em até 24h (normalmente minutos).
+        </div>
       </div>
 
-      <!-- Orders history -->
+      <!-- Orders -->
       <div id="ordersSection" class="card">
         <h3>Meus Pedidos</h3>
         <div id="ordersList" style="margin-top:1rem"></div>
       </div>
     </div>
   </div>
+
+  <div class="footer">
+    <p>© 2026 ClaudBridge</p>
+  </div>
+
   <script src="portal.js"></script>
   <script>
     const token = localStorage.getItem('portal_token');
     if (!token) window.location.href = '/portal/login.html';
+
+    document.querySelectorAll('.base-url-slot').forEach(el => {
+      el.textContent = window.location.origin;
+    });
 
     async function loadDashboard() {
       const res = await apiFetch('/portal/me');
@@ -113,26 +177,46 @@
       if (data.subscription) {
         document.getElementById('subSection').classList.remove('hidden');
         document.getElementById('planName').textContent = data.subscription.plan.name;
-        document.getElementById('dailyUsage').textContent = formatNum(data.usage?.daily || 0);
-        document.getElementById('monthlyUsage').textContent = formatNum(data.usage?.monthly || 0);
-        document.getElementById('monthlyLimit').textContent = formatNum(data.subscription.plan.tokensMonth);
+        const daily = data.usage?.daily || 0;
+        const monthly = data.usage?.monthly || 0;
+        const limit = data.subscription.plan.tokensMonth;
+        const budgetDay = data.subscription.plan.budgetDay || 4000000;
+        document.getElementById('dailyUsage').textContent = formatNum(daily);
+        document.getElementById('monthlyUsage').textContent = formatNum(monthly);
+        document.getElementById('monthlyLimit').textContent = formatNum(limit);
         document.getElementById('expiresAt').textContent = new Date(data.subscription.expires_at).toLocaleDateString('pt-BR');
+
+        // Usage bars
+        const dailyPct = Math.min(100, (daily / budgetDay) * 100);
+        const monthlyPct = Math.min(100, (monthly / limit) * 100);
+        document.getElementById('dailyPct').textContent = dailyPct.toFixed(0) + '%';
+        document.getElementById('monthlyPct').textContent = monthlyPct.toFixed(0) + '%';
+        document.getElementById('dailyBar').style.width = dailyPct + '%';
+        document.getElementById('monthlyBar').style.width = monthlyPct + '%';
+        if (dailyPct > 100) document.getElementById('dailyBar').classList.add('danger');
+        else if (dailyPct > 75) document.getElementById('dailyBar').classList.add('warn');
+        if (monthlyPct > 90) document.getElementById('monthlyBar').classList.add('danger');
+        else if (monthlyPct > 70) document.getElementById('monthlyBar').classList.add('warn');
+
         document.getElementById('apiKeyValue').textContent = data.subscription.api_key;
       } else {
         document.getElementById('noSubSection').classList.remove('hidden');
       }
 
-      // Load orders
+      // Orders
       const ordersRes = await apiFetch('/portal/orders');
       if (ordersRes.ok) {
         const orders = await ordersRes.json();
         const html = orders.map(o => `
-          <div style="display:flex;justify-content:space-between;padding:0.5rem 0;border-bottom:1px solid var(--border)">
-            <span>${o.plan_id} - R$ ${o.amount_brl.toFixed(2)}</span>
-            <span style="color:${o.status==='confirmed'?'var(--green)':o.status==='rejected'?'var(--red)':'var(--yellow)'}">${o.status}</span>
+          <div class="order-item">
+            <div>
+              <span style="font-weight:600">${o.plan_id}</span>
+              <span style="color:var(--text3);font-size:0.85rem;margin-left:0.5rem">R$ ${o.amount_brl.toFixed(2)}</span>
+            </div>
+            <span class="order-status ${o.status}">${o.status === 'confirmed' ? '✅ Confirmado' : o.status === 'rejected' ? '❌ Rejeitado' : '⏳ Pendente'}</span>
           </div>
         `).join('');
-        document.getElementById('ordersList').innerHTML = html || '<p style="color:var(--text2)">Nenhum pedido ainda.</p>';
+        document.getElementById('ordersList').innerHTML = html || '<p style="color:var(--text3)">Nenhum pedido ainda.</p>';
       }
     }
 
@@ -150,15 +234,13 @@
     }
 
     function copyKey() {
+      const btn = document.querySelector('.copy-btn');
       navigator.clipboard.writeText(document.getElementById('apiKeyValue').textContent);
-      document.querySelector('.copy-btn').textContent = 'Copiado!';
-      setTimeout(() => document.querySelector('.copy-btn').textContent = 'Copiar', 2000);
+      btn.textContent = '✓ Copiado!'; setTimeout(() => btn.textContent = 'Copiar', 2000);
     }
-
     function copyPix() {
       navigator.clipboard.writeText(document.getElementById('pixPayload').textContent);
     }
-
     function formatNum(n) {
       if (n >= 1_000_000) return (n/1_000_000).toFixed(1) + 'M';
       if (n >= 1_000) return (n/1_000).toFixed(0) + 'K';

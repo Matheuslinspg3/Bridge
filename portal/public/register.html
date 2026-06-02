@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cadastro - ClaudBridge</title>
+  <title>Criar Conta - ClaudBridge</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="portal.css">
 </head>
 <body>
@@ -12,53 +14,56 @@
     <nav>
       <a href="/portal/">Início</a>
       <a href="/portal/login.html">Login</a>
-      <a href="/portal/register.html">Cadastro</a>
     </nav>
   </div>
-  <div class="container" style="max-width:450px">
-    <div class="card">
-      <h3>Criar Conta</h3>
+  <div class="container" style="max-width:440px;margin-top:4rem">
+    <div class="card" style="padding:2.5rem">
+      <h2 style="text-align:center;margin-bottom:0.5rem">Criar conta</h2>
+      <p style="text-align:center;color:var(--text2);margin-bottom:2rem;font-size:0.9rem">
+        Comece a usar a API em minutos
+      </p>
       <div id="error" class="alert alert-error hidden"></div>
       <form id="registerForm">
         <div class="form-group">
-          <label for="name">Nome</label>
-          <input type="text" id="name" required placeholder="Seu nome">
+          <label>Nome</label>
+          <input type="text" id="name" placeholder="Seu nome" required>
         </div>
         <div class="form-group">
-          <label for="email">Email</label>
-          <input type="email" id="email" required placeholder="seu@email.com">
+          <label>Email</label>
+          <input type="email" id="email" placeholder="seu@email.com" required>
         </div>
         <div class="form-group">
-          <label for="password">Senha</label>
-          <input type="password" id="password" required minlength="6" placeholder="Mínimo 6 caracteres">
+          <label>Senha</label>
+          <input type="password" id="password" placeholder="Mínimo 6 caracteres" required minlength="6">
         </div>
-        <button type="submit" class="btn" style="width:100%">Cadastrar</button>
+        <button type="submit" class="btn" style="width:100%;margin-top:0.5rem">
+          Criar conta
+        </button>
       </form>
-      <p style="margin-top:1rem;text-align:center;color:var(--text2);font-size:0.9rem">
+      <p style="text-align:center;margin-top:1.5rem;font-size:0.9rem;color:var(--text2)">
         Já tem conta? <a href="/portal/login.html">Entrar</a>
       </p>
     </div>
   </div>
   <script src="portal.js"></script>
   <script>
-    document.getElementById('registerForm').onsubmit = async (e) => {
+    document.getElementById('registerForm').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const name = document.getElementById('name').value;
-      const email = document.getElementById('email').value;
-      const password = document.getElementById('password').value;
       const err = document.getElementById('error');
       err.classList.add('hidden');
-      try {
-        const res = await fetch('/portal/register', {
-          method: 'POST', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ name, email, password })
-        });
-        const data = await res.json();
-        if (!res.ok) { err.textContent = data.error; err.classList.remove('hidden'); return; }
-        localStorage.setItem('portal_token', data.token);
-        window.location.href = '/portal/dashboard.html';
-      } catch(e) { err.textContent = 'Erro de conexão'; err.classList.remove('hidden'); }
-    };
+      const res = await fetch('/portal/api/register', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          name: document.getElementById('name').value,
+          email: document.getElementById('email').value,
+          password: document.getElementById('password').value
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) { err.textContent = data.error; err.classList.remove('hidden'); return; }
+      localStorage.setItem('portal_token', data.token);
+      window.location.href = '/portal/dashboard.html';
+    });
   </script>
 </body>
 </html>

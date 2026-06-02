@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ClaudBridge - Acesso API Claude & GPT</title>
+  <title>ClaudBridge — API Claude & GPT com preço justo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="portal.css">
 </head>
 <body>
@@ -12,45 +14,141 @@
     <nav>
       <a href="/portal/">Início</a>
       <a href="/portal/login.html">Login</a>
-      <a href="/portal/register.html">Cadastro</a>
+      <a href="/portal/register.html" class="btn btn-sm">Criar conta</a>
     </nav>
   </div>
+
   <div class="container">
+    <!-- Hero -->
     <div class="hero">
-      <h2>API Claude & GPT com preço justo</h2>
-      <p>Acesse os melhores modelos de IA via API compatível com OpenAI e Anthropic. Pagamento via PIX, sem cartão internacional.</p>
+      <span class="badge">🇧🇷 Feito para devs brasileiros</span>
+      <h2>API Claude & GPT<br>pela metade do preço</h2>
+      <p>Acesse Claude Opus 4.7, GPT-5.5 e mais via API compatível. Pague via PIX, sem cartão internacional. Suporte em português.</p>
     </div>
+
+    <!-- Plans -->
     <div class="plans-grid">
       <div class="plan-card">
         <h3>Pro 5x</h3>
-        <div class="price">R$ 124,99<small>/mês</small></div>
+        <div class="price">R$124,99<small>/mês</small></div>
         <ul>
           <li>35M tokens output/mês</li>
+          <li>7× mais que Claude Pro</li>
           <li>15 requests/minuto</li>
-          <li>4096 max_tokens/request</li>
           <li>Budget diário: 4M tokens</li>
           <li>API key dedicada</li>
+          <li>Suporte por email</li>
         </ul>
-        <a href="/portal/register.html?plan=pro5x" class="btn">Começar</a>
+      <div class="plan-card featured">
+        <span class="plan-badge">Popular</span>
+        <h3>Max 10x</h3>
+        <div class="price">R$249,99<small>/mês</small></div>
+        <ul>
+          <li>90M tokens output/mês</li>
+          <li>18× mais que Claude Pro</li>
+          <li>25 requests/minuto</li>
+          <li>Budget diário: 8M tokens</li>
+          <li>API key dedicada</li>
+          <li>Suporte prioritário</li>
+        </ul>
+        <a href="/portal/register.html?plan=max10x" class="btn">Começar agora</a>
       </div>
+
       <div class="plan-card">
         <h3>Max 20x</h3>
-        <div class="price">R$ 499,99<small>/mês</small></div>
+        <div class="price">R$499,99<small>/mês</small></div>
         <ul>
           <li>225M tokens output/mês</li>
+          <li>45× mais que Claude Pro</li>
           <li>40 requests/minuto</li>
-          <li>16384 max_tokens/request</li>
           <li>Budget diário: 12M tokens</li>
           <li>API key dedicada</li>
+          <li>Suporte prioritário + Discord</li>
         </ul>
-        <a href="/portal/register.html?plan=max20x" class="btn">Começar</a>
+        <a href="/portal/register.html?plan=max20x" class="btn">Começar agora</a>
       </div>
     </div>
-    <div class="card" style="text-align:center;margin-top:2rem">
-      <h3>Como funciona?</h3>
-      <p style="color:var(--text2);margin-top:0.5rem">
-        1. Crie sua conta &rarr; 2. Escolha um plano &rarr; 3. Pague via PIX &rarr; 4. Receba sua API key em minutos
-      </p>
+
+    <!-- Features -->
+    <div class="features">
+      <div class="feature-item">
+        <div class="feature-icon">🔌</div>
+        <div>
+          <h4>100% compatível</h4>
+          <p>Funciona com Cursor, Claude Code, n8n, OpenClaw, SDK Anthropic e OpenAI. Troca só a base_url.</p>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon">💰</div>
+        <div>
+          <h4>PIX instantâneo</h4>
+          <p>Pague via PIX, sem complicação. Sem cartão internacional, sem dólar, sem surpresa na fatura.</p>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon">🛡️</div>
+        <div>
+          <h4>Multi-upstream redundante</h4>
+          <p>5 provedores com failover automático. Se um cai, outro assume em milissegundos. Zero downtime.</p>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon">🇧🇷</div>
+        <div>
+          <h4>Suporte em português</h4>
+          <p>Problema? Fala com gente que entende. Sem ticket em inglês, sem chatbot genérico.</p>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon">⚡</div>
+        <div>
+          <h4>Ativação em minutos</h4>
+          <p>Pagou, confirmou, tá usando. Sem burocracia, sem esperar dias pra verificação.</p>
+        </div>
+      </div>
+      <div class="feature-item">
+        <div class="feature-icon">📊</div>
+        <div>
+          <h4>Dashboard de uso</h4>
+          <p>Acompanhe seu consumo em tempo real. Veja quanto gastou hoje, no mês, e quanto falta.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- How it works -->
+    <div class="card" style="text-align:center; margin-top:2rem; padding:3rem">
+      <h3 style="font-size:1.5rem; margin-bottom:1.5rem">Como funciona</h3>
+      <div style="display:flex; justify-content:center; gap:3rem; flex-wrap:wrap; color:var(--text2)">
+        <div style="max-width:160px">
+          <div style="font-size:2rem; margin-bottom:0.5rem">1️⃣</div>
+          <p>Crie sua conta</p>
+        </div>
+        <div style="max-width:160px">
+          <div style="font-size:2rem; margin-bottom:0.5rem">2️⃣</div>
+          <p>Escolha um plano</p>
+        </div>
+        <div style="max-width:160px">
+          <div style="font-size:2rem; margin-bottom:0.5rem">3️⃣</div>
+          <p>Pague via PIX</p>
+        </div>
+        <div style="max-width:160px">
+          <div style="font-size:2rem; margin-bottom:0.5rem">4️⃣</div>
+          <p>Use sua API key</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- CTA -->
+    <div style="text-align:center; margin:4rem 0 2rem">
+      <h3 style="font-size:1.8rem; margin-bottom:1rem">Pronto pra começar?</h3>
+      <p style="color:var(--text2); margin-bottom:1.5rem">Crie sua conta em 30 segundos. Sem cartão de crédito.</p>
+      <a href="/portal/register.html" class="btn" style="padding:0.9rem 2.5rem; font-size:1.1rem">Criar conta grátis</a>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      <p>© 2026 ClaudBridge. Todos os direitos reservados.</p>
+      <p style="margin-top:0.5rem">Compatível com: Claude Opus 4.7 · Claude Sonnet · GPT-5.5 · Gemini</p>
     </div>
   </div>
 </body>
