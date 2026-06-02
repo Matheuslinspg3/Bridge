@@ -23,6 +23,25 @@ const round4 = (n) => Math.round(n * 10000) / 10000;
 
 const dayKey = () => new Date().toISOString().slice(0, 10);
 
+// ---- Pricing config (USD per million tokens) ----
+const PRICING = {
+  inputPerMillion: parseFloat(process.env.PRICING_INPUT_PER_MILLION || '0.31'),
+  outputPerMillion: parseFloat(process.env.PRICING_OUTPUT_PER_MILLION || '1.53'),
+};
+
+// ---- Usage Log (circular buffer, 1000 entries) ----
+const usageLog = [];
+const USAGE_LOG_MAX = 1000;
+
+const pushUsageLog = (entry) => {
+  usageLog.push({ at: new Date().toISOString(), ...entry });
+  if (usageLog.length > USAGE_LOG_MAX) usageLog.splice(0, usageLog.length - USAGE_LOG_MAX);
+};
+
+const calcCostUsd = (tokensIn, tokensOut) => {
+  return round4((tokensIn / 1_000_000) * PRICING.inputPerMillion + (tokensOut / 1_000_000) * PRICING.outputPerMillion);
+};
+
 let _idSeq = 0;
 const genId = () => `${Date.now().toString(36)}-${(++_idSeq).toString(36)}`;
 
@@ -349,7 +368,7 @@ const preflightGuardrails = (body, route) => {
   return { blocked: false };
 };
 
-const recordUsage = (usage, req) => {
+const recordUsage = (usage, req, meta) => {
   if (!usage) return;
   const inputTokens = usage.input_tokens || usage.prompt_tokens || 0;
   const outputTokens = usage.output_tokens || usage.completion_tokens || 0;
@@ -362,6 +381,20 @@ const recordUsage = (usage, req) => {
   if (req?.portalApiKey) {
     try { recordPortalUsage(req.portalApiKey, inputTokens, outputTokens); } catch {}
   }
+  // Push to detailed usage log
+  const costUsd = calcCostUsd(inputTokens, outputTokens);
+  pushUsageLog({
+    keyName: req?.apiKeyName || 'unknown',
+    model: meta?.model || req?.body?.model || config.defaultModel || '—',
+    route: meta?.route || '—',
+    upstream: meta?.upstream || '—',
+    tokensIn: inputTokens,
+    tokensOut: outputTokens,
+    costUsd,
+    durationMs: meta?.durationMs || 0,
+    ok: meta?.ok !== false,
+    requestId: meta?.requestId || null,
+  });
 };
 
 // Detecta quando o upstream devolve um modelo diferente do solicitado.
@@ -1304,6 +1337,58 @@ app.delete("/admin/errors", checkDashboardAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// GET /admin/usage (dashboard auth) — detailed usage analytics
+app.get("/admin/usage", checkDashboardAuth, (req, res) => {
+  const today = dayKey();
+  const month = today.slice(0, 7);
+
+  // Compute summary
+  let todayCostUsd = 0, monthCostUsd = 0, todayRequests = 0, totalTokensIn = 0, totalTokensOut = 0;
+  for (const e of usageLog) {
+    const day = (e.at || '').slice(0, 10);
+    const mon = (e.at || '').slice(0, 7);
+    totalTokensIn += e.tokensIn || 0;
+    totalTokensOut += e.tokensOut || 0;
+    if (day === today) { todayCostUsd += e.costUsd || 0; todayRequests++; }
+    if (mon === month) { monthCostUsd += e.costUsd || 0; }
+  }
+  const avgCostPerReq = usageLog.length > 0 ? round4(monthCostUsd / usageLog.length) : 0;
+
+  // By key aggregation
+  const keyMap = {};
+  for (const e of usageLog) {
+    const name = e.keyName || 'unknown';
+    if (!keyMap[name]) keyMap[name] = { name, requests: 0, tokensIn: 0, tokensOut: 0, costUsd: 0, errors: 0, totalMs: 0, lastUsed: null };
+    const k = keyMap[name];
+    k.requests++;
+    k.tokensIn += e.tokensIn || 0;
+    k.tokensOut += e.tokensOut || 0;
+    k.costUsd += e.costUsd || 0;
+    if (!e.ok) k.errors++;
+    k.totalMs += e.durationMs || 0;
+    if (!k.lastUsed || e.at > k.lastUsed) k.lastUsed = e.at;
+  }
+  const byKey = Object.values(keyMap).map(k => ({
+    name: k.name,
+    requests: k.requests,
+    tokensIn: k.tokensIn,
+    tokensOut: k.tokensOut,
+    costUsd: round4(k.costUsd),
+    errors: k.errors,
+    avgMs: k.requests > 0 ? Math.round(k.totalMs / k.requests) : 0,
+    lastUsed: k.lastUsed,
+  }));
+
+  // Last 100 log entries
+  const log = usageLog.slice(-100).reverse();
+
+  res.json({
+    summary: { todayCostUsd: round4(todayCostUsd), monthCostUsd: round4(monthCostUsd), todayRequests, totalTokensIn, totalTokensOut, avgCostPerReq },
+    byKey,
+    log,
+  });
+});
+
 // GET /admin/keys (dashboard auth) — lista chaves com stats, valor mascarado
 app.get("/admin/keys", checkDashboardAuth, (req, res) => {
   res.json((config.apiKeys || []).map((a) => ({
@@ -1388,6 +1473,7 @@ app.post("/v1/chat/completions", instrument("/v1/chat/completions"), checkAuth, 
   const anthropicBody = convertOpenAIToAnthropic(req.body);
   const isStream = req.body.stream === true;
   const reqModel = req.body.model || config.defaultModel;
+  const _usageStart = Date.now();
 
   try {
     const upstreamRes = await fetchUpstream(
@@ -1403,6 +1489,7 @@ app.post("/v1/chat/completions", instrument("/v1/chat/completions"), checkAuth, 
     if (!upstreamRes.ok) {
       const errBody = await upstreamRes.text().catch(() => "");
       touchApiKey(req.apiKeyObj, true);
+      pushUsageLog({ keyName: req.apiKeyName || 'unknown', model: reqModel, route: '/v1/chat/completions', upstream: (upstreams[0]||{}).name || '\u2014', tokensIn: 0, tokensOut: 0, costUsd: 0, durationMs: Date.now() - _usageStart, ok: false, requestId: parseUpstreamRequestId(errBody) });
       return res.status(upstreamRes.status).json({ error: { message: errBody } });
     }
     touchApiKey(req.apiKeyObj, false);
@@ -1411,12 +1498,15 @@ app.post("/v1/chat/completions", instrument("/v1/chat/completions"), checkAuth, 
       await sendOpenAIStream(upstreamRes, res, reqModel);
     } else {
       const data = await upstreamRes.json();
-      recordUsage(data.usage, req);
+      const _upName = (upstreams[0]||{}).name || '\u2014';
+      const _reqId = data.id || null;
+      recordUsage(data.usage, req, { model: reqModel, route: '/v1/chat/completions', upstream: _upName, durationMs: Date.now() - _usageStart, ok: true, requestId: _reqId });
       detectModelSwap(reqModel, data.model, "/v1/chat/completions");
       res.json(convertAnthropicToOpenAI(data, reqModel));
     }
   } catch (err) {
     touchApiKey(req.apiKeyObj, true);
+    pushUsageLog({ keyName: req.apiKeyName || 'unknown', model: reqModel, route: '/v1/chat/completions', upstream: '\u2014', tokensIn: 0, tokensOut: 0, costUsd: 0, durationMs: Date.now() - _usageStart, ok: false, requestId: null });
     res.status(502).json({ error: { message: err.message } });
   }
 });
@@ -1433,6 +1523,7 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
   const forceNonStream = config.openclawForceNonStreamRetry === true && isStream;
   const body = forceNonStream ? { ...req.body, stream: false } : req.body;
   const reqModel = req.body.model || config.defaultModel;
+  const _usageStart = Date.now();
   try {
     const upstreamRes = await fetchUpstream(
       "/v1/messages",
@@ -1442,6 +1533,7 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
     if (!upstreamRes.ok) {
       const errBody = await upstreamRes.text().catch(() => "");
       touchApiKey(req.apiKeyObj, true);
+      pushUsageLog({ keyName: req.apiKeyName || 'unknown', model: reqModel, route: '/v1/messages', upstream: (upstreams[0]||{}).name || '\u2014', tokensIn: 0, tokensOut: 0, costUsd: 0, durationMs: Date.now() - _usageStart, ok: false, requestId: parseUpstreamRequestId(errBody) });
       return res.status(upstreamRes.status).json({ error: { message: errBody } });
     }
     touchApiKey(req.apiKeyObj, false);
@@ -1455,18 +1547,21 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
       await sendUpstreamResponse(upstreamRes, res);
     } else if (forceNonStream && isStream) {
       const data = await upstreamRes.json();
-      recordUsage(data.usage, req);
+      const _upName = (upstreams[0]||{}).name || '\u2014';
+      recordUsage(data.usage, req, { model: reqModel, route: '/v1/messages', upstream: _upName, durationMs: Date.now() - _usageStart, ok: true, requestId: data.id || null });
       detectModelSwap(reqModel, data.model, "/v1/messages");
       await sendAnthropicStreamFromMessage(data, res);
     } else {
       const data = await upstreamRes.json();
-      recordUsage(data.usage, req);
+      const _upName = (upstreams[0]||{}).name || '\u2014';
+      recordUsage(data.usage, req, { model: reqModel, route: '/v1/messages', upstream: _upName, durationMs: Date.now() - _usageStart, ok: true, requestId: data.id || null });
       detectModelSwap(reqModel, data.model, "/v1/messages");
       copyAnthropicHeaders(upstreamRes, res);
       res.json(data);
     }
   } catch (err) {
     touchApiKey(req.apiKeyObj, true);
+    pushUsageLog({ keyName: req.apiKeyName || 'unknown', model: reqModel, route: '/v1/messages', upstream: '\u2014', tokensIn: 0, tokensOut: 0, costUsd: 0, durationMs: Date.now() - _usageStart, ok: false, requestId: null });
     res.status(502).json({ error: { message: err.message } });
   }
 });

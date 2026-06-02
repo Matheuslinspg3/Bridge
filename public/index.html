@@ -62,6 +62,7 @@
     <nav class="tab-nav">
       <button class="tab-btn active" data-tab="tabMain">Vis&#227;o Geral</button>
       <button class="tab-btn" data-tab="tabKeys">&#128273; Chaves de API</button>
+      <button class="tab-btn" data-tab="tabUsage">&#128202; Uso Detalhado</button>
       <button class="tab-btn" data-tab="tabSettings">&#9881; Configura&#231;&#245;es</button>
     </nav>
 
@@ -197,6 +198,35 @@
       </div>
     </section>
     </div><!-- /tabKeys -->
+
+    <!-- ============ TAB: USAGE ============ -->
+    <div id="tabUsage" class="hidden">
+    <section class="grid grid-4" style="grid-template-columns:repeat(5,1fr)">
+      <div class="card kpi"><span class="kpi-label">Custo hoje (USD)</span><span id="usageTodayCost" class="kpi-value">$0.00</span></div>
+      <div class="card kpi"><span class="kpi-label">Custo m&#234;s (USD)</span><span id="usageMonthCost" class="kpi-value">$0.00</span></div>
+      <div class="card kpi"><span class="kpi-label">Tokens totais</span><span id="usageTotalTokens" class="kpi-value">0</span></div>
+      <div class="card kpi"><span class="kpi-label">Requests hoje</span><span id="usageTodayReqs" class="kpi-value">0</span></div>
+      <div class="card kpi"><span class="kpi-label">M&#233;dia custo/req</span><span id="usageAvgCost" class="kpi-value">$0.00</span></div>
+    </section>
+    <section class="grid">
+      <div class="card">
+        <h3>Uso por API Key</h3>
+        <div class="table-scroll">
+          <table class="mini"><thead><tr><th>Chave</th><th>Requests</th><th>Tokens In</th><th>Tokens Out</th><th>Custo (USD)</th><th>&#218;ltimo uso</th><th>Erros</th><th>Lat&#234;ncia m&#233;dia</th></tr></thead><tbody id="usageByKeyTable"></tbody></table>
+        </div>
+        <p id="usageByKeyEmpty" class="muted small center" style="padding:12px 0">Sem dados de uso.</p>
+      </div>
+    </section>
+    <section class="grid">
+      <div class="card">
+        <h3>Log de requests (&#250;ltimos 100)</h3>
+        <div class="table-scroll" style="max-height:500px">
+          <table class="mini"><thead><tr><th>Hora</th><th>Chave</th><th>Modelo</th><th>Rota</th><th>Upstream</th><th>Tokens In</th><th>Tokens Out</th><th>Custo</th><th>Lat&#234;ncia</th><th>Status</th><th>Request ID</th></tr></thead><tbody id="usageLogTable"></tbody></table>
+        </div>
+        <p id="usageLogEmpty" class="muted small center" style="padding:12px 0">Sem registros.</p>
+      </div>
+    </section>
+    </div><!-- /tabUsage -->
 
     <!-- ============ TAB: SETTINGS ============ -->
     <div id="tabSettings" class="hidden">

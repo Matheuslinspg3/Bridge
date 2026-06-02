@@ -128,9 +128,11 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     const tab = btn.dataset.tab;
     $("#tabMain").classList.toggle("hidden", tab !== "tabMain");
     $("#tabKeys").classList.toggle("hidden", tab !== "tabKeys");
+    $("#tabUsage").classList.toggle("hidden", tab !== "tabUsage");
     $("#tabSettings").classList.toggle("hidden", tab !== "tabSettings");
     if (tab === "tabSettings") refreshSettings();
     if (tab === "tabKeys") refreshKeys();
+    if (tab === "tabUsage") refreshUsage();
   });
 });
 
@@ -734,9 +736,57 @@ $("#createKeyBtn").addEventListener("click", async () => {
   refreshKeys();
 });
 
+/* ---- Usage Tab ---- */
+async function refreshUsage() {
+  try {
+    const r = await fetch("/admin/usage", { headers: { Authorization: `Bearer ${getToken()}` } });
+    if (!r.ok) return;
+    const data = await r.json();
+    renderUsageSummary(data.summary);
+    renderUsageByKey(data.byKey);
+    renderUsageLog(data.log);
+  } catch(e) { console.error("[usage]", e); }
+}
+
+function renderUsageSummary(s) {
+  $("#usageTodayCost").textContent = "$" + (s.todayCostUsd || 0).toFixed(4);
+  $("#usageMonthCost").textContent = "$" + (s.monthCostUsd || 0).toFixed(4);
+  $("#usageTotalTokens").textContent = fmt((s.totalTokensIn || 0) + (s.totalTokensOut || 0));
+  $("#usageTodayReqs").textContent = fmt(s.todayRequests || 0);
+  $("#usageAvgCost").textContent = "$" + (s.avgCostPerReq || 0).toFixed(6);
+}
+
+function renderUsageByKey(byKey) {
+  const tbody = $("#usageByKeyTable");
+  const empty = $("#usageByKeyEmpty");
+  tbody.innerHTML = "";
+  if (!byKey || !byKey.length) { empty.classList.remove("hidden"); return; }
+  empty.classList.add("hidden");
+  for (const k of byKey) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><code>${escHtml(k.name)}</code></td><td>${fmt(k.requests)}</td><td>${fmt(k.tokensIn)}</td><td>${fmt(k.tokensOut)}</td><td>$${(k.costUsd||0).toFixed(4)}</td><td>${humanDate(k.lastUsed)}</td><td class="bad">${k.errors||0}</td><td>${k.avgMs||0} ms</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function renderUsageLog(log) {
+  const tbody = $("#usageLogTable");
+  const empty = $("#usageLogEmpty");
+  tbody.innerHTML = "";
+  if (!log || !log.length) { empty.classList.remove("hidden"); return; }
+  empty.classList.add("hidden");
+  for (const e of log) {
+    const tr = document.createElement("tr");
+    const statusCls = e.ok ? "good" : "bad";
+    const statusTxt = e.ok ? "ok" : "erro";
+    tr.innerHTML = `<td>${humanTime(e.at)}</td><td><code>${escHtml(e.keyName||'\u2014')}</code></td><td>${escHtml(e.model||'\u2014')}</td><td><code>${escHtml(e.route||'\u2014')}</code></td><td>${escHtml(e.upstream||'\u2014')}</td><td>${fmt(e.tokensIn||0)}</td><td>${fmt(e.tokensOut||0)}</td><td>$${(e.costUsd||0).toFixed(4)}</td><td>${e.durationMs||0} ms</td><td class="${statusCls}">${statusTxt}</td><td><code class="small">${escHtml(e.requestId||'\u2014')}</code></td>`;
+    tbody.appendChild(tr);
+  }
+}
+
 /* ---- Auto-refresh ---- */
 let timer = null;
-function startTimer() { if (timer) clearInterval(timer); timer = setInterval(refresh, 5000); }
+function startTimer() { if (timer) clearInterval(timer); timer = setInterval(() => { refresh(); if (!$("#tabUsage").classList.contains("hidden")) refreshUsage(); }, 5000); }
 
 /* ---- Event listeners (main tab) ---- */
 $("#refreshBtn").addEventListener("click", refresh);
