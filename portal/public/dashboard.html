@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard - ClaudBridge</title>
+  <link rel="stylesheet" href="portal.css">
+</head>
+<body>
+  <div class="header">
+    <h1>⚡ ClaudBridge</h1>
+    <nav>
+      <a href="/portal/">Início</a>
+      <a href="/portal/dashboard.html">Dashboard</a>
+      <a href="#" id="logoutBtn">Sair</a>
+    </nav>
+  </div>
+  <div class="container">
+    <h2 style="margin-bottom:1.5rem">Meu Painel</h2>
+    <div id="loading">Carregando...</div>
+    <div id="content" class="hidden">
+      <!-- Subscription info -->
+      <div id="subSection" class="card hidden">
+        <h3>Plano Ativo: <span id="planName"></span></h3>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="value" id="dailyUsage">0</div>
+            <div class="label">Tokens hoje</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="monthlyUsage">0</div>
+            <div class="label">Tokens este mês</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="monthlyLimit">0</div>
+            <div class="label">Limite mensal</div>
+          </div>
+          <div class="stat-card">
+            <div class="value" id="expiresAt">-</div>
+            <div class="label">Expira em</div>
+          </div>
+        </div>
+        <h3 style="margin-top:1.5rem">Sua API Key</h3>
+        <div class="api-key-box">
+          <span id="apiKeyValue"></span>
+          <button class="copy-btn" onclick="copyKey()">Copiar</button>
+        </div>
+        <p style="color:var(--text2);font-size:0.8rem;margin-top:0.5rem">
+          Use como Bearer token ou x-api-key. Compatível com OpenAI e Anthropic SDK.
+        </p>
+      </div>
+
+      <!-- No subscription -->
+      <div id="noSubSection" class="card hidden">
+        <h3>Nenhum plano ativo</h3>
+        <p style="color:var(--text2)">Escolha um plano abaixo para começar a usar a API.</p>
+      </div>
+
+      <!-- Plan selection -->
+      <div id="planSelection" class="card">
+        <h3>Assinar / Renovar Plano</h3>
+        <div class="plans-grid" style="margin-top:1rem">
+          <div class="plan-card" style="padding:1.5rem">
+            <h3>Pro 5x</h3>
+            <div class="price" style="font-size:1.5rem">R$ 124,99</div>
+            <button class="btn btn-sm" onclick="orderPlan('pro5x')">Pagar via PIX</button>
+          </div>
+          <div class="plan-card" style="padding:1.5rem">
+            <h3>Max 10x</h3>
+            <div class="price" style="font-size:1.5rem">R$ 249,99</div>
+            <button class="btn btn-sm" onclick="orderPlan('max10x')">Pagar via PIX</button>
+          </div>
+          <div class="plan-card" style="padding:1.5rem">
+            <h3>Max 20x</h3>
+            <div class="price" style="font-size:1.5rem">R$ 499,99</div>
+            <button class="btn btn-sm" onclick="orderPlan('max20x')">Pagar via PIX</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- PIX payment modal -->
+      <div id="pixModal" class="card hidden">
+        <h3>📱 Pagamento PIX</h3>
+        <div class="qr-container">
+          <img id="pixQR" src="" alt="QR Code PIX">
+          <p class="pix-code">Cópia e cola: <span id="pixPayload"></span></p>
+          <button class="btn btn-sm" onclick="copyPix()" style="margin-top:0.5rem">Copiar código PIX</button>
+        </div>
+        <p style="color:var(--text2);font-size:0.85rem;margin-top:1rem;text-align:center">
+          Após o pagamento, sua key será ativada em até 24h (normalmente minutos).
+        </p>
+      </div>
+
+      <!-- Orders history -->
+      <div id="ordersSection" class="card">
+        <h3>Meus Pedidos</h3>
+        <div id="ordersList" style="margin-top:1rem"></div>
+      </div>
+    </div>
+  </div>
+  <script src="portal.js"></script>
+  <script>
+    const token = localStorage.getItem('portal_token');
+    if (!token) window.location.href = '/portal/login.html';
+
+    async function loadDashboard() {
+      const res = await apiFetch('/portal/me');
+      if (!res.ok) { window.location.href = '/portal/login.html'; return; }
+      const data = await res.json();
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('content').classList.remove('hidden');
+
+      if (data.subscription) {
+        document.getElementById('subSection').classList.remove('hidden');
+        document.getElementById('planName').textContent = data.subscription.plan.name;
+        document.getElementById('dailyUsage').textContent = formatNum(data.usage?.daily || 0);
+        document.getElementById('monthlyUsage').textContent = formatNum(data.usage?.monthly || 0);
+        document.getElementById('monthlyLimit').textContent = formatNum(data.subscription.plan.tokensMonth);
+        document.getElementById('expiresAt').textContent = new Date(data.subscription.expires_at).toLocaleDateString('pt-BR');
+        document.getElementById('apiKeyValue').textContent = data.subscription.api_key;
+      } else {
+        document.getElementById('noSubSection').classList.remove('hidden');
+      }
+
+      // Load orders
+      const ordersRes = await apiFetch('/portal/orders');
+      if (ordersRes.ok) {
+        const orders = await ordersRes.json();
+        const html = orders.map(o => `
+          <div style="display:flex;justify-content:space-between;padding:0.5rem 0;border-bottom:1px solid var(--border)">
+            <span>${o.plan_id} - R$ ${o.amount_brl.toFixed(2)}</span>
+            <span style="color:${o.status==='confirmed'?'var(--green)':o.status==='rejected'?'var(--red)':'var(--yellow)'}">${o.status}</span>
+          </div>
+        `).join('');
+        document.getElementById('ordersList').innerHTML = html || '<p style="color:var(--text2)">Nenhum pedido ainda.</p>';
+      }
+    }
+
+    async function orderPlan(planId) {
+      const res = await apiFetch('/portal/orders', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ plan_id: planId })
+      });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error); return; }
+      document.getElementById('pixQR').src = data.qr_code;
+      document.getElementById('pixPayload').textContent = data.pix_payload;
+      document.getElementById('pixModal').classList.remove('hidden');
+      document.getElementById('pixModal').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function copyKey() {
+      navigator.clipboard.writeText(document.getElementById('apiKeyValue').textContent);
+      document.querySelector('.copy-btn').textContent = 'Copiado!';
+      setTimeout(() => document.querySelector('.copy-btn').textContent = 'Copiar', 2000);
+    }
+
+    function copyPix() {
+      navigator.clipboard.writeText(document.getElementById('pixPayload').textContent);
+    }
+
+    function formatNum(n) {
+      if (n >= 1_000_000) return (n/1_000_000).toFixed(1) + 'M';
+      if (n >= 1_000) return (n/1_000).toFixed(0) + 'K';
+      return n.toString();
+    }
+
+    loadDashboard();
+  </script>
+</body>
+</html>

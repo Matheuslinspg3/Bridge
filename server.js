@@ -6,6 +6,10 @@ import dns from "dns";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import cookieParser from "cookie-parser";
+import portalRouter from './portal/routes.js';
+import { checkPlanLimits, recordPortalUsage } from './portal/ratelimit.js';
+import { initDB } from './portal/db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -345,7 +349,7 @@ const preflightGuardrails = (body, route) => {
   return { blocked: false };
 };
 
-const recordUsage = (usage) => {
+const recordUsage = (usage, req) => {
   if (!usage) return;
   const inputTokens = usage.input_tokens || usage.prompt_tokens || 0;
   const outputTokens = usage.output_tokens || usage.completion_tokens || 0;
@@ -354,6 +358,10 @@ const recordUsage = (usage) => {
     grState.budget.usedUsd + estimateUsd(inputTokens, outputTokens)
   );
   grState.budget.totalUsd = round4((grState.budget.totalUsd || 0) + estimateUsd(inputTokens, outputTokens));
+  // Record portal usage if this is a portal key
+  if (req?.portalApiKey) {
+    try { recordPortalUsage(req.portalApiKey, inputTokens, outputTokens); } catch {}
+  }
 };
 
 // Detecta quando o upstream devolve um modelo diferente do solicitado.
@@ -826,9 +834,23 @@ const checkAuth = (req, res, next) => {
     req.apiKeyName = keyObj.name;
     return next();
   }
+  // Check portal keys (SQLite-based subscriptions)
+  try {
+    const rateCheck = checkPlanLimits(key, req.body);
+    if (rateCheck.blocked) {
+      return res.status(429).json({ error: { message: rateCheck.reason } });
+    }
+    if (rateCheck.sub) {
+      req.apiKeyObj = { key, name: `portal:${rateCheck.sub.user_name}`, portalKey: true, plan: rateCheck.plan };
+      req.apiKeyName = `portal:${rateCheck.sub.email}`;
+      req.portalApiKey = key;
+      return next();
+    }
+  } catch {}
   console.warn('[auth] 401 — key mismatch (len recv=' + key.length + ')');
   return res.status(401).json({ error: { message: "Invalid API key", type: "invalid_request_error" } });
 };
+
 
 const checkDashboardAuth = (req, res, next) => {
   const token = req.headers["x-dashboard-token"] || req.headers["authorization"]?.replace("Bearer ", "") || "";
@@ -1389,7 +1411,7 @@ app.post("/v1/chat/completions", instrument("/v1/chat/completions"), checkAuth, 
       await sendOpenAIStream(upstreamRes, res, reqModel);
     } else {
       const data = await upstreamRes.json();
-      recordUsage(data.usage);
+      recordUsage(data.usage, req);
       detectModelSwap(reqModel, data.model, "/v1/chat/completions");
       res.json(convertAnthropicToOpenAI(data, reqModel));
     }
@@ -1433,12 +1455,12 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
       await sendUpstreamResponse(upstreamRes, res);
     } else if (forceNonStream && isStream) {
       const data = await upstreamRes.json();
-      recordUsage(data.usage);
+      recordUsage(data.usage, req);
       detectModelSwap(reqModel, data.model, "/v1/messages");
       await sendAnthropicStreamFromMessage(data, res);
     } else {
       const data = await upstreamRes.json();
-      recordUsage(data.usage);
+      recordUsage(data.usage, req);
       detectModelSwap(reqModel, data.model, "/v1/messages");
       copyAnthropicHeaders(upstreamRes, res);
       res.json(data);
@@ -1450,12 +1472,23 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
 });
 
 // ============================================================
-// 15. START SERVER
+// 15. PORTAL INTEGRATION
 // ============================================================
-app.listen(PORT, () => {
-  console.log(`Claude Bridge v2.0.0-smart-routing listening on port ${PORT}`);
-  console.log(`Config path: ${CONFIG_PATH}`);
-  console.log(`Configured: ${isConfigured()}`);
-  console.log(`Upstreams: ${getEnabledUpstreams().length} enabled`);
-  startHealthCheckLoop();
-});
+
+app.use(cookieParser());
+app.use('/portal', portalRouter);
+
+// ============================================================
+// 16. START SERVER
+// ============================================================
+(async () => {
+  await initDB();
+  app.listen(PORT, () => {
+    console.log(`Claude Bridge v2.0.0-smart-routing listening on port ${PORT}`);
+    console.log(`Config path: ${CONFIG_PATH}`);
+    console.log(`Configured: ${isConfigured()}`);
+    console.log(`Upstreams: ${getEnabledUpstreams().length} enabled`);
+    console.log(`Portal DB initialized`);
+    startHealthCheckLoop();
+  });
+})();

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cadastro - ClaudBridge</title>
+  <link rel="stylesheet" href="portal.css">
+</head>
+<body>
+  <div class="header">
+    <h1>⚡ ClaudBridge</h1>
+    <nav>
+      <a href="/portal/">Início</a>
+      <a href="/portal/login.html">Login</a>
+      <a href="/portal/register.html">Cadastro</a>
+    </nav>
+  </div>
+  <div class="container" style="max-width:450px">
+    <div class="card">
+      <h3>Criar Conta</h3>
+      <div id="error" class="alert alert-error hidden"></div>
+      <form id="registerForm">
+        <div class="form-group">
+          <label for="name">Nome</label>
+          <input type="text" id="name" required placeholder="Seu nome">
+        </div>
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input type="email" id="email" required placeholder="seu@email.com">
+        </div>
+        <div class="form-group">
+          <label for="password">Senha</label>
+          <input type="password" id="password" required minlength="6" placeholder="Mínimo 6 caracteres">
+        </div>
+        <button type="submit" class="btn" style="width:100%">Cadastrar</button>
+      </form>
+      <p style="margin-top:1rem;text-align:center;color:var(--text2);font-size:0.9rem">
+        Já tem conta? <a href="/portal/login.html">Entrar</a>
+      </p>
+    </div>
+  </div>
+  <script src="portal.js"></script>
+  <script>
+    document.getElementById('registerForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const name = document.getElementById('name').value;
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+      const err = document.getElementById('error');
+      err.classList.add('hidden');
+      try {
+        const res = await fetch('/portal/register', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ name, email, password })
+        });
+        const data = await res.json();
+        if (!res.ok) { err.textContent = data.error; err.classList.remove('hidden'); return; }
+        localStorage.setItem('portal_token', data.token);
+        window.location.href = '/portal/dashboard.html';
+      } catch(e) { err.textContent = 'Erro de conexão'; err.classList.remove('hidden'); }
+    };
+  </script>
+</body>
+</html>
