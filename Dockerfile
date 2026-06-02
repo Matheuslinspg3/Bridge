@@ -7,8 +7,9 @@ RUN npm install --omit=dev
 
 COPY server.js ./
 COPY public ./public
+COPY portal ./portal
 
-# /data é o volume persistente onde config.json é salvo
+# /data é o volume persistente onde config.json e claudbridge.db são salvos
 RUN mkdir -p /data
 
 ENV PORT=8787
