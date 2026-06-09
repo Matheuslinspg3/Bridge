@@ -600,3 +600,10 @@ footer { margin-top: 24px; padding: 18px 0; }
 .key-item-value { font-size: 11px; color: var(--muted); }
 .key-item-stats { margin-bottom: 6px; }
 .key-item-actions { display: flex; gap: 8px; }
+
+/* ---- Payments tab ---- */
+.btn-sm { padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; border: none; cursor: pointer; margin: 2px; }
+.btn-ok { background: #22c55e; color: #fff; }
+.btn-ok:hover { background: #16a34a; }
+.btn-danger { background: #ef4444; color: #fff; }
+.btn-danger:hover { background: #dc2626; }
