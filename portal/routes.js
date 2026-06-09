@@ -6,7 +6,7 @@ import cookieParser from 'cookie-parser';
 import { initDB, queryAll, queryOne, run, saveDB } from './db.js';
 import { hashPassword, comparePassword, createToken, requireAuth } from './auth.js';
 import {
-  PLANS, createOrder, confirmOrder, rejectOrder,
+  PLANS, TOP_UP, createOrder, confirmOrder, rejectOrder,
   getPendingOrders, getRecentConfirmed,
   expireSubscriptions
 } from './billing.js';
@@ -128,7 +128,7 @@ router.get('/plans', (req, res) => {
 router.post('/orders', requireAuth, async (req, res) => {
   try {
     const { plan_id } = req.body || {};
-    if (!PLANS[plan_id])
+    if (!PLANS[plan_id] && plan_id !== 'topup_15m')
       return res.status(400).json({ error: 'Plano inválido' });
 
     const result = await createOrder(req.portalUser.id, plan_id);
@@ -179,6 +179,36 @@ router.post('/admin/payments/:id/reject', requireAdmin, (req, res) => {
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+// GET /portal/admin/profit — aggregate usage & revenue per account
+router.get('/admin/profit', requireAdmin, (req, res) => {
+  const accounts = queryAll(`
+    SELECT u.id, u.email,
+      s.plan_id,
+      COALESCE(rev.total_revenue, 0) as revenue,
+      COALESCE(usg.tokens_input, 0) as tokens_input,
+      COALESCE(usg.tokens_output, 0) as tokens_output,
+      COALESCE(usg.tokens_cache_write, 0) as tokens_cache_write,
+      COALESCE(usg.tokens_cache_read, 0) as tokens_cache_read
+    FROM users u
+    LEFT JOIN subscriptions s ON s.user_id = u.id AND s.active = 1
+    LEFT JOIN (
+      SELECT o.user_id, SUM(o.amount_brl) as total_revenue
+      FROM orders o WHERE o.status = 'confirmed'
+      GROUP BY o.user_id
+    ) rev ON rev.user_id = u.id
+    LEFT JOIN (
+      SELECT ul.api_key,
+        SUM(ul.tokens_input) as tokens_input,
+        SUM(ul.tokens_output) as tokens_output,
+        SUM(COALESCE(ul.tokens_cache_write, 0)) as tokens_cache_write,
+        SUM(COALESCE(ul.tokens_cache_read, 0)) as tokens_cache_read
+      FROM usage_log ul GROUP BY ul.api_key
+    ) usg ON usg.api_key = s.api_key
+    ORDER BY revenue DESC
+  `);
+  res.json({ accounts });
 });
 
 // ── Expiration check (run periodically) ──

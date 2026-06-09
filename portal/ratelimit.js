@@ -1,5 +1,5 @@
 import { queryOne, run } from './db.js';
-import { PLANS, getActiveSubscription } from './billing.js';
+import { PLANS, getActiveSubscription, getTopupsThisMonth } from './billing.js';
 
 // In-memory RPM tracker: { apiKey: { count, windowStart } }
 const rpmTracker = {};
@@ -78,25 +78,27 @@ export function checkPlanLimits(apiKey, body) {
     return { blocked: true, reason: `Limite diário excedido (${plan.name}). Tente novamente amanhã.` };
   }
 
-  // 4. Cap mensal
+  // 4. Cap mensal (plan tokens + top-ups)
   const monthlyUsage = getMonthlyUsage(apiKey);
-  if (monthlyUsage >= plan.tokensMonth) {
-    return { blocked: true, reason: `Cota mensal esgotada (${plan.name}). Faça upgrade ou aguarde o próximo ciclo.` };
+  const topupTokens = getTopupsThisMonth(sub.user_id);
+  const monthlyLimit = plan.tokensMonth + topupTokens;
+  if (monthlyUsage >= monthlyLimit) {
+    return { blocked: true, reason: `Cota mensal esgotada (${plan.name}). Compre um pacote extra ou aguarde o próximo ciclo.` };
   }
 
   return { blocked: false, plan, sub };
 }
 
 /**
- * Registra uso de tokens output após resposta.
+ * Registra uso de tokens após resposta (input, output, cache_write, cache_read).
  */
-export function recordPortalUsage(apiKey, tokensInput, tokensOutput) {
+export function recordPortalUsage(apiKey, tokensInput, tokensOutput, tokensCacheWrite, tokensCacheRead) {
   if (!apiKey) return;
   const sub = getActiveSubscription(apiKey);
   if (!sub) return;
   run(
-    `INSERT INTO usage_log (api_key, tokens_input, tokens_output, logged_at) VALUES (?, ?, ?, datetime('now'))`,
-    [apiKey, tokensInput || 0, tokensOutput || 0]
+    `INSERT INTO usage_log (api_key, tokens_input, tokens_output, tokens_cache_write, tokens_cache_read, logged_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+    [apiKey, tokensInput || 0, tokensOutput || 0, tokensCacheWrite || 0, tokensCacheRead || 0]
   );
 }
 

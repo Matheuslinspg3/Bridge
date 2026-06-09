@@ -65,6 +65,7 @@
       <button class="tab-btn" data-tab="tabUsage">&#128202; Uso Detalhado</button>
       <button class="tab-btn" data-tab="tabSettings">&#9881; Configurações</button>
       <button class="tab-btn" data-tab="tabPayments">&#128179; Pagamentos</button>
+      <button class="tab-btn" data-tab="tabProfit">&#128176; Lucro</button>
     </nav>
 
     <!-- ============ TAB: MAIN ============ -->
@@ -288,6 +289,38 @@
         <div class="box">
           <h3>Confirmados Recentes</h3>
           <div id="recentPayments"><p class="muted">Nenhum</p></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ TAB: PROFIT ============ -->
+    <div id="tabProfit" class="hidden">
+      <section class="grid grid-4">
+        <div class="box"><h4 class="muted">Faturamento</h4><div class="big" id="profitRevenue">R$ 0</div></div>
+        <div class="box"><h4 class="muted">Custo RC</h4><div class="big" id="profitCost">R$ 0</div></div>
+        <div class="box"><h4 class="muted">Lucro Líquido</h4><div class="big" id="profitNet">R$ 0</div></div>
+        <div class="box"><h4 class="muted">Contas no vermelho</h4><div class="big" id="profitRedAccounts">0</div></div>
+      </section>
+      <section class="grid">
+        <div class="box">
+          <h3>Config de custos</h3>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+            <label style="font-size:12px">Input ¥/M<input id="rcInput" value="1.50" style="width:60px;margin-left:4px"></label>
+            <label style="font-size:12px">Output ¥/M<input id="rcOutput" value="7.50" style="width:60px;margin-left:4px"></label>
+            <label style="font-size:12px">CacheWrite ¥/M<input id="rcCacheWrite" value="1.875" style="width:60px;margin-left:4px"></label>
+            <label style="font-size:12px">CacheRead ¥/M<input id="rcCacheRead" value="0.15" style="width:60px;margin-left:4px"></label>
+            <label style="font-size:12px">Câmbio ¥→R$<input id="rcFx" value="0.76" style="width:60px;margin-left:4px"></label>
+          </div>
+          <button class="btn-sm" onclick="loadProfit()">Recalcular</button>
+        </div>
+      </section>
+      <section class="grid">
+        <div class="box">
+          <h3>Por conta</h3>
+          <div class="table-scroll">
+            <table class="mini"><thead><tr><th>Email</th><th>Plano</th><th>Receita R$</th><th>Input</th><th>Output</th><th>CacheW</th><th>CacheR</th><th>Custo R$</th><th>Margem R$</th><th>%</th></tr></thead>
+            <tbody id="profitTable"></tbody></table>
+          </div>
         </div>
       </section>
     </div>
