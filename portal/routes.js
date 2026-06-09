@@ -18,6 +18,16 @@ const __dirname = path.dirname(__filename);
 const router = Router();
 router.use(cookieParser());
 
+// ── Admin auth middleware ──
+function requireAdmin(req, res, next) {
+  const token = req.headers['x-dashboard-token'] || '';
+  const expected = process.env.DASHBOARD_PASSWORD || process.env.PROXY_API_KEY || '';
+  if (!token || !expected || token !== expected) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
 // Serve static files for portal
 router.use(express.static(path.join(__dirname, 'public')));
 
@@ -144,9 +154,7 @@ router.get('/orders', requireAuth, (req, res) => {
 // ── Admin payment routes (uses dashboard token) ──
 
 // GET /portal/admin/payments
-router.get('/admin/payments', (req, res) => {
-  const token = req.headers['x-dashboard-token'] || '';
-  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+router.get('/admin/payments', requireAdmin, (req, res) => {
   res.json({
     pending: getPendingOrders(),
     recent: getRecentConfirmed(),
@@ -154,9 +162,7 @@ router.get('/admin/payments', (req, res) => {
 });
 
 // POST /portal/admin/payments/:id/confirm
-router.post('/admin/payments/:id/confirm', (req, res) => {
-  const token = req.headers['x-dashboard-token'] || '';
-  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+router.post('/admin/payments/:id/confirm', requireAdmin, (req, res) => {
   try {
     const result = confirmOrder(Number(req.params.id));
     res.json({ ok: true, api_key: result.apiKey, expires_at: result.expiresAt });
@@ -166,9 +172,7 @@ router.post('/admin/payments/:id/confirm', (req, res) => {
 });
 
 // POST /portal/admin/payments/:id/reject
-router.post('/admin/payments/:id/reject', (req, res) => {
-  const token = req.headers['x-dashboard-token'] || '';
-  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+router.post('/admin/payments/:id/reject', requireAdmin, (req, res) => {
   try {
     rejectOrder(Number(req.params.id));
     res.json({ ok: true });

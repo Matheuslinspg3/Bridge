@@ -817,3 +817,106 @@ $("#grMaxTokensLimit").addEventListener("keydown", (e) => { if (e.key === "Enter
 $("#modalCloseBtn").addEventListener("click", closeErrorModal);
 $("#errorModal").addEventListener("click", (e) => { if (e.target === $("#errorModal")) closeErrorModal(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeErrorModal(); });
+/* ---- Payments Tab ---- */
+async function loadPayments() {
+  const token = getToken();
+  try {
+    const res = await fetch("/portal/admin/payments", {
+      headers: { "x-dashboard-token": token }
+    });
+    if (!res.ok) {
+      $("#pendingPayments").innerHTML = '<p class="muted">Sem acesso (verifique permissão admin)</p>';
+      return;
+    }
+    const data = await res.json();
+    renderPendingPayments(data.pending || []);
+    renderRecentPayments(data.recent || []);
+  } catch (e) {
+    $("#pendingPayments").innerHTML = `<p class="muted">Erro: ${escHtml(e.message)}</p>`;
+  }
+}
+
+function renderPendingPayments(orders) {
+  if (!orders.length) {
+    $("#pendingPayments").innerHTML = '<p class="muted">Nenhum pedido pendente 🎉</p>';
+    return;
+  }
+  const rows = orders.map(o => `
+    <tr>
+      <td>#${o.id}</td>
+      <td>${escHtml(o.email || '')}</td>
+      <td>${escHtml(o.name || '')}</td>
+      <td><span class="badge">${o.plan_id}</span></td>
+      <td>R$ ${Number(o.amount_brl || 0).toFixed(2)}</td>
+      <td>${humanDate(o.created_at)}</td>
+      <td>
+        <button class="btn-sm btn-ok" onclick="confirmPayment(${o.id})">✓ Confirmar</button>
+        <button class="btn-sm btn-danger" onclick="rejectPayment(${o.id})">✗ Rejeitar</button>
+      </td>
+    </tr>
+  `).join('');
+  $("#pendingPayments").innerHTML = `
+    <div class="table-scroll">
+      <table class="mini"><thead><tr><th>ID</th><th>Email</th><th>Nome</th><th>Plano</th><th>Valor</th><th>Data</th><th>Ações</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    </div>`;
+}
+
+function renderRecentPayments(orders) {
+  if (!orders.length) {
+    $("#recentPayments").innerHTML = '<p class="muted">Nenhum confirmado recente</p>';
+    return;
+  }
+  const rows = orders.map(o => `
+    <tr>
+      <td>#${o.id}</td>
+      <td>${escHtml(o.email || '')}</td>
+      <td>${o.plan_id}</td>
+      <td>R$ ${Number(o.amount_brl || 0).toFixed(2)}</td>
+      <td>${humanDate(o.confirmed_at || o.created_at)}</td>
+    </tr>
+  `).join('');
+  $("#recentPayments").innerHTML = `
+    <div class="table-scroll">
+      <table class="mini"><thead><tr><th>ID</th><th>Email</th><th>Plano</th><th>Valor</th><th>Confirmado</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    </div>`;
+}
+
+async function confirmPayment(id) {
+  const token = getToken();
+  try {
+    const res = await fetch(`/portal/admin/payments/${id}/confirm`, {
+      method: "POST",
+      headers: { "x-dashboard-token": token }
+    });
+    const data = await res.json();
+    if (data.ok) {
+      alert(`✓ Confirmado! API Key: ${data.api_key}\nExpira: ${data.expires_at}`);
+      loadPayments();
+    } else {
+      alert(`Erro: ${data.error}`);
+    }
+  } catch (e) { alert(`Erro: ${e.message}`); }
+}
+
+async function rejectPayment(id) {
+  if (!confirm("Rejeitar este pagamento?")) return;
+  const token = getToken();
+  try {
+    const res = await fetch(`/portal/admin/payments/${id}/reject`, {
+      method: "POST",
+      headers: { "x-dashboard-token": token }
+    });
+    const data = await res.json();
+    if (data.ok) { loadPayments(); }
+    else { alert(`Erro: ${data.error}`); }
+  } catch (e) { alert(`Erro: ${e.message}`); }
+}
+
+// Hook into tab switching to load payments
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (btn.dataset.tab === 'tabPayments') loadPayments();
+  });
+});

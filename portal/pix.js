@@ -1,9 +1,9 @@
 import QRCode from 'qrcode';
 
 // Dados PIX estáticos
-const PIX_KEY = '13996666432';
-const PIX_NAME = 'MATHEUS LINS LIMA';
-const PIX_CITY = 'PRAIA GRANDE';
+const PIX_KEY = process.env.PIX_KEY || '13996666432';
+const PIX_NAME = process.env.PIX_NAME || 'MATHEUS LINS LIMA';
+const PIX_CITY = process.env.PIX_CITY || 'PRAIA GRANDE';
 
 // CRC16 CCITT (para payload PIX)
 function crc16(str) {

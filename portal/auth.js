@@ -2,7 +2,13 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { queryOne } from './db.js';
 
-const JWT_SECRET = process.env.PORTAL_JWT_SECRET || 'claudbridge-portal-secret-change-me';
+import crypto from 'crypto';
+
+let JWT_SECRET = process.env.PORTAL_JWT_SECRET || process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  JWT_SECRET = crypto.randomBytes(32).toString('hex');
+  console.warn('[portal/auth] WARN: JWT_SECRET not set — using random in-memory secret. Tokens will not survive restarts.');
+}
 const JWT_EXPIRES = '7d';
 
 export const hashPassword = (plain) => bcrypt.hashSync(plain, 10);

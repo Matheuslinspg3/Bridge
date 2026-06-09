@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 
-const ADMIN_EMAIL = 'matheuslinspg@gmail.com';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'matheuslinspg@gmail.com';
 
 // Transporter: usa variáveis de ambiente ou fallback para log
 let transporter = null;

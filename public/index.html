@@ -63,7 +63,8 @@
       <button class="tab-btn active" data-tab="tabMain">Vis&#227;o Geral</button>
       <button class="tab-btn" data-tab="tabKeys">&#128273; Chaves de API</button>
       <button class="tab-btn" data-tab="tabUsage">&#128202; Uso Detalhado</button>
-      <button class="tab-btn" data-tab="tabSettings">&#9881; Configura&#231;&#245;es</button>
+      <button class="tab-btn" data-tab="tabSettings">&#9881; Configurações</button>
+      <button class="tab-btn" data-tab="tabPayments">&#128179; Pagamentos</button>
     </nav>
 
     <!-- ============ TAB: MAIN ============ -->
@@ -274,6 +275,23 @@
       </div>
     </section>
     </div><!-- /tabSettings -->
+
+    <!-- ============ TAB: PAYMENTS ============ -->
+    <div id="tabPayments" class="hidden">
+      <section class="grid">
+        <div class="box">
+          <h3>Pedidos Pendentes</h3>
+          <div id="pendingPayments"><p class="muted">Carregando...</p></div>
+        </div>
+      </section>
+      <section class="grid">
+        <div class="box">
+          <h3>Confirmados Recentes</h3>
+          <div id="recentPayments"><p class="muted">Nenhum</p></div>
+        </div>
+      </section>
+    </div>
+
   </main>
 
   <!-- ERROR DETAIL MODAL -->
