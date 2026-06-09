@@ -22,6 +22,7 @@
   --radius: 16px;
   --radius-sm: 10px;
 }
+html { scroll-behavior: smooth; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
   font-family: 'Inter', -apple-system, sans-serif;
@@ -99,7 +100,8 @@ code, .mono { font-family: 'Geist Mono', monospace; }
 .step-num { width: 22px; height: 22px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-size: 11px; font-weight: 700; }
 .step-arrow { font-size: 18px; color: var(--text-muted); }
 
-.section { max-width: 900px; margin: 0 auto; padding: 80px 32px; }
+.section { max-width: 900px; margin: 0 auto; padding: 80px 32px; scroll-margin-top: 80px; }
+.steps { scroll-margin-top: 80px; }
 .section-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--accent); margin-bottom: 12px; }
 .section h2 { font-size: 32px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 16px; }
 .section p.desc { font-size: 16px; color: var(--text-muted); margin-bottom: 40px; max-width: 600px; }
@@ -160,7 +162,6 @@ code, .mono { font-family: 'Geist Mono', monospace; }
     <a href="#como">Como funciona</a>
     <a href="#vantagens">Vantagens</a>
     <a href="#preco">Preço</a>
-    <a href="/dev">Painel Dev</a>
     <a href="/auth" class="nav-btn">Entrar</a>
   </div>
 </nav>
