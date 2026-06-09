@@ -131,6 +131,12 @@ const saveConfig = (cfg) => {
 
 let config = loadConfig();
 
+// Env var DASHBOARD_PASSWORD é fonte de verdade: se definida, sobrepõe o
+// valor persistido em config.json (unifica painel /dev, proxy e portal).
+if (process.env.DASHBOARD_PASSWORD && process.env.DASHBOARD_PASSWORD.trim()) {
+  config.dashboardPassword = process.env.DASHBOARD_PASSWORD.trim();
+}
+
 const isConfigured = () =>
   config.upstreams.length > 0 && !!config.dashboardPassword;
 
