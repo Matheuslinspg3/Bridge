@@ -170,7 +170,7 @@ $('#loginForm').addEventListener('submit', async (e) => {
     if (!res.ok) { msg(data.error || 'Erro', 'error'); return; }
     if (data.token) localStorage.setItem('portal_token', data.token);
     msg('Login realizado! Redirecionando...', 'success');
-    setTimeout(() => window.location.href = '/portal', 800);
+    setTimeout(() => window.location.href = '/portal/dashboard.html', 800);
   } catch (err) { msg('Erro de conexão', 'error'); }
 });
 
@@ -190,7 +190,7 @@ $('#registerForm').addEventListener('submit', async (e) => {
     if (!res.ok) { msg(data.error || 'Erro', 'error'); return; }
     if (data.token) localStorage.setItem('portal_token', data.token);
     msg('Conta criada! Redirecionando...', 'success');
-    setTimeout(() => window.location.href = '/portal', 800);
+    setTimeout(() => window.location.href = '/portal/dashboard.html', 800);
   } catch (err) { msg('Erro de conexão', 'error'); }
 });
 </script>
