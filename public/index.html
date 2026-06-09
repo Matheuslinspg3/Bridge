@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Claude Bridge — Gateway SaaS para Claude API</title>
+<title>Claude Bridge — Claude por uma fração do preço</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -33,7 +33,6 @@ body {
 }
 code, .mono { font-family: 'Geist Mono', monospace; }
 
-/* ===== NAV ===== */
 .nav {
   position: fixed; top: 0; left: 0; right: 0;
   padding: 16px 32px;
@@ -43,26 +42,14 @@ code, .mono { font-family: 'Geist Mono', monospace; }
   border-bottom: 1px solid var(--border);
   z-index: 100;
 }
-.nav-brand {
-  font-weight: 800; font-size: 18px;
-  display: flex; align-items: center; gap: 8px;
-}
+.nav-brand { font-weight: 800; font-size: 18px; display: flex; align-items: center; gap: 8px; }
 .nav-brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
 .nav-links { display: flex; gap: 24px; align-items: center; }
-.nav-links a {
-  color: var(--text-muted); font-size: 14px; font-weight: 500;
-  text-decoration: none; transition: color .2s;
-}
+.nav-links a { color: var(--text-muted); font-size: 14px; font-weight: 500; text-decoration: none; transition: color .2s; }
 .nav-links a:hover { color: var(--text); }
-.nav-btn {
-  background: var(--accent); color: #fff;
-  padding: 8px 18px; border-radius: 8px;
-  font-size: 13px; font-weight: 600;
-  text-decoration: none; transition: filter .2s;
-}
+.nav-btn { background: var(--accent); color: #fff; padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; text-decoration: none; transition: filter .2s; }
 .nav-btn:hover { filter: brightness(1.1); }
 
-/* ===== HERO ===== */
 .hero {
   padding: 160px 32px 80px;
   text-align: center;
@@ -85,10 +72,7 @@ code, .mono { font-family: 'Geist Mono', monospace; }
   margin-bottom: 20px;
 }
 .hero h1 .accent { color: var(--accent); }
-.hero p {
-  font-size: 18px; color: var(--text-muted);
-  max-width: 560px; margin: 0 auto 36px;
-}
+.hero p { font-size: 18px; color: var(--text-muted); max-width: 580px; margin: 0 auto 36px; }
 .hero-cta {
   display: inline-flex; align-items: center; gap: 10px;
   background: var(--accent); color: #fff;
@@ -100,70 +84,54 @@ code, .mono { font-family: 'Geist Mono', monospace; }
 }
 .hero-cta:hover { transform: translateY(-2px); box-shadow: 0 12px 32px rgba(249, 115, 22, 0.4); }
 
-/* ===== FLOW DIAGRAM ===== */
-.flow {
+.steps {
   display: flex; align-items: center; justify-content: center;
-  gap: 16px; margin: 48px auto; padding: 0 16px;
+  gap: 12px; margin: 48px auto; padding: 0 16px;
   flex-wrap: wrap;
 }
-.flow-box {
-  padding: 14px 20px; border-radius: var(--radius-sm);
-  font-size: 14px; font-weight: 600;
+.step-box {
+  padding: 12px 18px; border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 600;
   border: 1px solid var(--border);
   background: var(--surface);
+  display: flex; align-items: center; gap: 8px;
 }
-.flow-box.bridge {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.flow-arrow { font-size: 20px; color: var(--text-muted); }
+.step-num { width: 22px; height: 22px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-size: 11px; font-weight: 700; }
+.step-arrow { font-size: 18px; color: var(--text-muted); }
 
-/* ===== SECTIONS ===== */
-.section {
-  max-width: 900px; margin: 0 auto;
-  padding: 80px 32px;
-}
-.section-title {
-  font-size: 13px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 1.5px;
-  color: var(--accent); margin-bottom: 12px;
-}
-.section h2 {
-  font-size: 32px; font-weight: 800;
-  letter-spacing: -0.5px; margin-bottom: 16px;
-}
-.section p.desc {
-  font-size: 16px; color: var(--text-muted);
-  margin-bottom: 40px; max-width: 600px;
-}
+.section { max-width: 900px; margin: 0 auto; padding: 80px 32px; }
+.section-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: var(--accent); margin-bottom: 12px; }
+.section h2 { font-size: 32px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 16px; }
+.section p.desc { font-size: 16px; color: var(--text-muted); margin-bottom: 40px; max-width: 600px; }
 
-/* ===== TWO LAYERS ===== */
-.layers { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-@media (max-width: 640px) { .layers { grid-template-columns: 1fr; } }
-.layer {
+.features { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
+.feat {
   padding: 24px; border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--surface);
 }
-.layer h3 { font-size: 18px; font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
-.layer p { font-size: 14px; color: var(--text-muted); line-height: 1.5; }
-.layer ul { list-style: none; margin-top: 12px; }
-.layer ul li { font-size: 13px; color: var(--text-muted); padding: 4px 0; display: flex; align-items: center; gap: 8px; }
-.layer ul li::before { content: "→"; color: var(--accent); font-weight: 700; }
+.feat .icon { font-size: 28px; margin-bottom: 12px; }
+.feat h4 { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+.feat p { font-size: 14px; color: var(--text-muted); line-height: 1.5; }
 
-/* ===== USE CASES ===== */
-.cases { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
-.case {
-  padding: 20px; border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--bg2);
+.pricing {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 32px;
+  text-align: center; margin-top: 40px;
 }
-.case .icon { font-size: 28px; margin-bottom: 10px; }
-.case h4 { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
-.case p { font-size: 13px; color: var(--text-muted); }
+.pricing h3 { font-size: 20px; font-weight: 800; margin-bottom: 8px; }
+.pricing .price { font-size: 36px; font-weight: 800; color: var(--accent); }
+.pricing .price small { font-size: 16px; color: var(--text-muted); font-weight: 500; }
+.pricing p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
 
-/* ===== SUMMARY ===== */
+.compat { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-top: 32px; }
+.compat-tag {
+  padding: 8px 14px; border-radius: 8px;
+  font-size: 13px; font-weight: 600;
+  background: var(--bg2); border: 1px solid var(--border);
+  color: var(--text);
+}
+
 .summary {
   text-align: center; padding: 60px 32px;
   border-top: 1px solid var(--border);
@@ -177,20 +145,11 @@ code, .mono { font-family: 'Geist Mono', monospace; }
 }
 .summary blockquote .accent { color: var(--accent); }
 
-/* ===== CTA FINAL ===== */
-.cta-section {
-  text-align: center; padding: 80px 32px;
-  max-width: 600px; margin: 0 auto;
-}
+.cta-section { text-align: center; padding: 80px 32px; max-width: 600px; margin: 0 auto; }
 .cta-section h2 { font-size: 28px; font-weight: 800; margin-bottom: 12px; }
 .cta-section p { color: var(--text-muted); margin-bottom: 28px; }
 
-/* ===== FOOTER ===== */
-.footer {
-  text-align: center; padding: 40px;
-  font-size: 13px; color: var(--text-muted);
-  border-top: 1px solid var(--border);
-}
+.footer { text-align: center; padding: 40px; font-size: 13px; color: var(--text-muted); border-top: 1px solid var(--border); }
 </style>
 </head>
 <body>
@@ -199,97 +158,100 @@ code, .mono { font-family: 'Geist Mono', monospace; }
   <div class="nav-brand"><span class="dot"></span> Claude Bridge</div>
   <div class="nav-links">
     <a href="#como">Como funciona</a>
-    <a href="#camadas">Camadas</a>
-    <a href="#casos">Casos de uso</a>
+    <a href="#vantagens">Vantagens</a>
+    <a href="#preco">Preço</a>
     <a href="/dev">Painel Dev</a>
     <a href="/auth" class="nav-btn">Entrar</a>
   </div>
 </nav>
 
 <section class="hero">
-  <div class="badge"><span class="dot"></span> Gateway online</div>
-  <h1>Sua ponte inteligente para a <span class="accent">Claude API</span></h1>
-  <p>Gateway SaaS que roteia, protege e monitora chamadas para o upstream Claude. Retry automático, rate limiting, circuit breaker e portal de assinaturas.</p>
-  <a href="/auth" class="hero-cta">Começar agora →</a>
+  <div class="badge"><span class="dot"></span> API online — 99.9% uptime</div>
+  <h1>Claude por uma <span class="accent">fração do preço</span></h1>
+  <p>Acesso ao Claude Opus, Sonnet e outros modelos top com sua própria API key. Crie conta, pague via PIX e plugue em qualquer ferramenta.</p>
+  <a href="/auth" class="hero-cta">Criar conta →</a>
 
-  <div class="flow" id="como">
-    <div class="flow-box">App externo</div>
-    <span class="flow-arrow">→</span>
-    <div class="flow-box bridge">Claude Bridge</div>
-    <span class="flow-arrow">→</span>
-    <div class="flow-box">Upstream Claude</div>
+  <div class="steps" id="como">
+    <div class="step-box"><span class="step-num">1</span> Cria conta</div>
+    <span class="step-arrow">→</span>
+    <div class="step-box"><span class="step-num">2</span> Escolhe plano</div>
+    <span class="step-arrow">→</span>
+    <div class="step-box"><span class="step-num">3</span> Paga via PIX</div>
+    <span class="step-arrow">→</span>
+    <div class="step-box"><span class="step-num">4</span> Recebe API key</div>
   </div>
 </section>
 
-<section class="section" id="camadas">
-  <div class="section-title">Arquitetura</div>
-  <h2>Duas camadas, uma solução</h2>
-  <p class="desc">O Bridge opera em duas camadas complementares que entregam resiliência técnica e gestão de acesso.</p>
-  <div class="layers">
-    <div class="layer">
-      <h3>⚡ Bridge Técnico</h3>
-      <p>Proxy inteligente entre seu app e a API Claude.</p>
-      <ul>
-        <li>Retry infinito com backoff exponencial</li>
-        <li>Throttling e concurrency control</li>
-        <li>Circuit breaker automático</li>
-        <li>Compatível OpenAI e Anthropic</li>
-        <li>Forced non-stream em overload</li>
-      </ul>
+<section class="section" id="vantagens">
+  <div class="section-title">Por que usar</div>
+  <h2>O que você ganha</h2>
+  <p class="desc">Preço menor, API compatível, sem burocracia de cartão internacional.</p>
+  <div class="features">
+    <div class="feat">
+      <div class="icon">💰</div>
+      <h4>Preço menor que o oficial</h4>
+      <p>Planos a partir de R$ 124,99/mês com cotas generosas de tokens. Sem dólar, sem cartão internacional.</p>
     </div>
-    <div class="layer">
-      <h3>🔑 Portal SaaS</h3>
-      <p>Gestão de assinaturas e API keys.</p>
-      <ul>
-        <li>Cadastro e login com JWT</li>
-        <li>Planos com limite de tokens/mês</li>
-        <li>Pagamento via PIX (QR Code)</li>
-        <li>Rate limiting por chave (RPM + budget)</li>
-        <li>Dashboard de uso em tempo real</li>
-      </ul>
+    <div class="feat">
+      <div class="icon">🔌</div>
+      <h4>API compatível OpenAI + Anthropic</h4>
+      <p>Mesma interface que a API oficial. Funciona em qualquer ferramenta que aceite OpenAI ou Anthropic: n8n, OpenClaw, Cursor, Continue, etc.</p>
+    </div>
+    <div class="feat">
+      <div class="icon">⚡</div>
+      <h4>PIX e pronto</h4>
+      <p>Paga via PIX, recebe a API key em minutos. Sem aprovação de cartão, sem invoice em dólar, sem KYC estrangeiro.</p>
+    </div>
+    <div class="feat">
+      <div class="icon">📊</div>
+      <h4>Dashboard de uso</h4>
+      <p>Acompanhe seu consumo diário e mensal em tempo real. Veja exatamente quantos tokens usou e quanto falta.</p>
     </div>
   </div>
 </section>
 
-<section class="section" id="casos">
-  <div class="section-title">Casos de uso</div>
-  <h2>Para quem é</h2>
-  <div class="cases">
-    <div class="case">
-      <div class="icon">🤖</div>
-      <h4>Agentes autônomos</h4>
-      <p>OpenClaw, AutoGPT, CrewAI — qualquer agente que precise de Claude com resiliência.</p>
-    </div>
-    <div class="case">
-      <div class="icon">⚙️</div>
-      <h4>Automações n8n / Make</h4>
-      <p>Use como credential OpenAI no n8n apontando para o Bridge. Zero mudanças no fluxo.</p>
-    </div>
-    <div class="case">
-      <div class="icon">💼</div>
-      <h4>Revenda de API</h4>
-      <p>Venda acesso à Claude com planos, PIX e rate limiting. Pronto para SaaS.</p>
-    </div>
-    <div class="case">
-      <div class="icon">🛡️</div>
-      <h4>Proteção de chave</h4>
-      <p>Não exponha sua API key do upstream. O Bridge faz o proxy e protege.</p>
-    </div>
+<section class="section" id="preco">
+  <div class="section-title">Planos</div>
+  <h2>Simples e direto</h2>
+  <p class="desc">Escolha pela quantidade de tokens que você precisa por mês.</p>
+  <div class="pricing">
+    <h3>A partir de</h3>
+    <div class="price">R$ 124,99<small>/mês</small></div>
+    <p>35 milhões de tokens · 15 req/min · Claude Opus, Sonnet e mais</p>
+    <p style="margin-top: 16px; font-size: 13px; color: var(--text-muted);">Planos maiores: R$ 249,99 (90M tokens) · R$ 499,99 (225M tokens)</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-title">Compatibilidade</div>
+  <h2>Funciona onde você já usa</h2>
+  <p class="desc">Sua API key funciona com qualquer client que suporte OpenAI ou Anthropic API.</p>
+  <div class="compat">
+    <span class="compat-tag">n8n</span>
+    <span class="compat-tag">OpenClaw</span>
+    <span class="compat-tag">Cursor</span>
+    <span class="compat-tag">Continue</span>
+    <span class="compat-tag">Cline</span>
+    <span class="compat-tag">Kiro</span>
+    <span class="compat-tag">AutoGPT</span>
+    <span class="compat-tag">CrewAI</span>
+    <span class="compat-tag">LangChain</span>
+    <span class="compat-tag">qualquer client OpenAI</span>
   </div>
 </section>
 
 <section class="summary">
-  <blockquote>"Um proxy que <span class="accent">nunca desiste</span>, um portal que <span class="accent">cobra em PIX</span>, e um dashboard que <span class="accent">mostra tudo</span>."</blockquote>
+  <blockquote>"Claude Opus e Sonnet, <span class="accent">pagando em real via PIX</span>, com API key pronta em minutos."</blockquote>
 </section>
 
 <section class="cta-section">
-  <h2>Pronto para começar?</h2>
-  <p>Crie sua conta, escolha um plano e tenha sua API key em minutos.</p>
+  <h2>Pronto pra começar?</h2>
+  <p>Crie sua conta agora e tenha acesso ao Claude por uma fração do preço oficial.</p>
   <a href="/auth" class="hero-cta">Criar conta gratuita →</a>
 </section>
 
 <footer class="footer">
-  Claude Bridge © 2025 — Gateway SaaS para Claude API
+  Claude Bridge © 2025
 </footer>
 
 </body>

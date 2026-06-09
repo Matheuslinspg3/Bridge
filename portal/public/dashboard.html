@@ -12,7 +12,7 @@
   <div class="header">
     <div class="logo">⚡ <span>ClaudBridge</span></div>
     <nav>
-      <a href="/portal/">Início</a>
+      <a href="/">Início</a>
       <a href="/portal/dashboard.html">Dashboard</a>
       <a href="#" id="logoutBtn">Sair</a>
     </nav>
@@ -157,7 +157,7 @@ claude</pre>
   <script src="portal.js"></script>
   <script>
     const token = localStorage.getItem('portal_token');
-    if (!token) window.location.href = '/portal/login.html';
+    if (!token) window.location.href = '/auth';
 
     document.querySelectorAll('.base-url-slot').forEach(el => {
       el.textContent = window.location.origin;
@@ -165,7 +165,7 @@ claude</pre>
 
     async function loadDashboard() {
       const res = await apiFetch('/portal/me');
-      if (!res.ok) { window.location.href = '/portal/login.html'; return; }
+      if (!res.ok) { window.location.href = '/auth'; return; }
       const data = await res.json();
       document.getElementById('loading').classList.add('hidden');
       document.getElementById('content').classList.remove('hidden');
@@ -240,6 +240,13 @@ claude</pre>
       if (n >= 1_000) return (n/1_000).toFixed(0) + 'K';
       return n.toString();
     }
+
+    document.getElementById("logoutBtn").addEventListener("click", (e) => {
+      e.preventDefault();
+      localStorage.removeItem("portal_token");
+      fetch("/portal/logout", { method: "POST" });
+      window.location.href = "/auth";
+    });
 
     loadDashboard();
   </script>
