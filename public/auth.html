@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Bridge — Entrar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0a0f;
+  --surface: #1a1a24;
+  --border: #2a2a3a;
+  --text: #e4e4e7;
+  --text-muted: #71717a;
+  --accent: #f97316;
+  --accent-soft: rgba(249, 115, 22, 0.12);
+  --green: #22c55e;
+  --red: #ef4444;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Inter', -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.auth-card {
+  width: 100%; max-width: 400px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 40px 32px;
+}
+.auth-logo {
+  text-align: center; margin-bottom: 32px;
+}
+.auth-logo h1 {
+  font-size: 22px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.auth-logo .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+.auth-logo p { font-size: 14px; color: var(--text-muted); margin-top: 6px; }
+
+.tabs {
+  display: flex; gap: 0; margin-bottom: 28px;
+  border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+}
+.tab-btn {
+  flex: 1; padding: 10px; text-align: center;
+  font-size: 14px; font-weight: 600;
+  background: transparent; color: var(--text-muted);
+  border: none; cursor: pointer; transition: all .2s;
+}
+.tab-btn.active { background: var(--accent-soft); color: var(--accent); }
+
+.form { display: none; }
+.form.active { display: block; }
+
+.field { margin-bottom: 16px; }
+.field label { display: block; font-size: 13px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; }
+.field input {
+  width: 100%; padding: 12px 16px;
+  border-radius: 10px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text);
+  font-family: inherit; font-size: 15px; font-weight: 500;
+  outline: none; transition: border .2s;
+}
+.field input:focus { border-color: var(--accent); }
+
+.btn {
+  width: 100%; padding: 14px;
+  border-radius: 10px; border: none;
+  background: var(--accent); color: #fff;
+  font-family: inherit; font-size: 15px; font-weight: 700;
+  cursor: pointer; transition: filter .15s;
+  margin-top: 8px;
+}
+.btn:hover { filter: brightness(1.1); }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.msg { font-size: 13px; padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; display: none; }
+.msg.error { display: block; background: rgba(239,68,68,.1); color: var(--red); border: 1px solid rgba(239,68,68,.3); }
+.msg.success { display: block; background: rgba(34,197,94,.1); color: var(--green); border: 1px solid rgba(34,197,94,.3); }
+
+.back-link {
+  display: block; text-align: center; margin-top: 20px;
+  font-size: 13px; color: var(--text-muted); text-decoration: none;
+}
+.back-link:hover { color: var(--text); }
+</style>
+</head>
+<body>
+
+<div class="auth-card">
+  <div class="auth-logo">
+    <h1><span class="dot"></span> Claude Bridge</h1>
+    <p>Acesse sua conta ou crie uma nova</p>
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-form="loginForm">Entrar</button>
+    <button class="tab-btn" data-form="registerForm">Criar conta</button>
+  </div>
+
+  <div id="msgBox" class="msg"></div>
+
+  <form id="loginForm" class="form active">
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="loginEmail" placeholder="seu@email.com" required>
+    </div>
+    <div class="field">
+      <label>Senha</label>
+      <input type="password" id="loginPassword" placeholder="••••••" required>
+    </div>
+    <button type="submit" class="btn">Entrar →</button>
+  </form>
+
+  <form id="registerForm" class="form">
+    <div class="field">
+      <label>Nome</label>
+      <input type="text" id="regName" placeholder="Seu nome">
+    </div>
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="regEmail" placeholder="seu@email.com" required>
+    </div>
+    <div class="field">
+      <label>Senha</label>
+      <input type="password" id="regPassword" placeholder="Mínimo 6 caracteres" required minlength="6">
+    </div>
+    <button type="submit" class="btn">Criar conta →</button>
+  </form>
+
+  <a href="/" class="back-link">← Voltar para o site</a>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const msg = (text, type) => { const m = $('#msgBox'); m.textContent = text; m.className = 'msg ' + type; };
+const clearMsg = () => { $('#msgBox').className = 'msg'; $('#msgBox').textContent = ''; };
+
+// Tab switching
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.form').forEach(f => f.classList.remove('active'));
+    btn.classList.add('active');
+    $('#' + btn.dataset.form).classList.add('active');
+    clearMsg();
+  });
+});
+
+// Login
+$('#loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault(); clearMsg();
+  const email = $('#loginEmail').value;
+  const password = $('#loginPassword').value;
+  try {
+    const res = await fetch('/portal/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    const data = await res.json();
+    if (!res.ok) { msg(data.error || 'Erro', 'error'); return; }
+    if (data.token) localStorage.setItem('portal_token', data.token);
+    msg('Login realizado! Redirecionando...', 'success');
+    setTimeout(() => window.location.href = '/portal', 800);
+  } catch (err) { msg('Erro de conexão', 'error'); }
+});
+
+// Register
+$('#registerForm').addEventListener('submit', async (e) => {
+  e.preventDefault(); clearMsg();
+  const name = $('#regName').value;
+  const email = $('#regEmail').value;
+  const password = $('#regPassword').value;
+  try {
+    const res = await fetch('/portal/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, name })
+    });
+    const data = await res.json();
+    if (!res.ok) { msg(data.error || 'Erro', 'error'); return; }
+    if (data.token) localStorage.setItem('portal_token', data.token);
+    msg('Conta criada! Redirecionando...', 'success');
+    setTimeout(() => window.location.href = '/portal', 800);
+  } catch (err) { msg('Erro de conexão', 'error'); }
+});
+</script>
+</body>
+</html>

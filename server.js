@@ -1089,6 +1089,12 @@ const sendUpstreamResponse = async (upstreamRes, res) => {
 // GET /health
 app.get("/health", (req, res) => res.json({ ok: true }));
 
+// Route: /dev -> dashboard (before static to avoid directory redirect)
+app.get("/dev", (req, res) => res.sendFile(path.join(__dirname, "public/dev/index.html")));
+
+// Route: /auth -> auth page
+app.get("/auth", (req, res) => res.sendFile(path.join(__dirname, "public/auth.html")));
+
 // Static files
 app.use(express.static(path.join(__dirname, "public")));
 

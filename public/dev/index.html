@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Claude Bridge — Dashboard</title>
+  <link rel="stylesheet" href="/dev/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E"/>
+</head>
+<body>
+  <!-- SETUP -->
+  <section id="setup" class="login-wrap hidden">
+    <div class="login-card" style="max-width:480px">
+      <h1>&#9889; Claude Bridge &mdash; Configura&#231;&#227;o inicial</h1>
+      <p class="muted">Configure o bridge pela primeira vez.</p>
+      <div id="setupStep1">
+        <h4>Passo 1 &mdash; Senha &#250;nica</h4>
+        <label>Senha (usada para o dashboard E como API key do bridge)</label>
+        <input id="setupDashPass" type="password" placeholder="ex: sk-bridge-minha-senha-forte" />
+        <button id="setupNext1Btn">Pr&#243;ximo &#8594;</button>
+      </div>
+      <div id="setupStep2" class="hidden">
+        <h4>Passo 2 &mdash; Upstream</h4>
+        <label>Nome do upstream</label>
+        <input id="setupUpName" type="text" value="Nuoda" />
+        <label>Base URL</label>
+        <input id="setupUpUrl" type="text" value="https://api.nuoda.vip" />
+        <label>API Key</label>
+        <input id="setupUpKey" type="password" placeholder="sk-..." />
+        <button id="setupBackBtn">&#8592; Voltar</button>
+        <button id="setupFinishBtn">Salvar e iniciar</button>
+      </div>
+      <div id="setupError" class="error hidden"></div>
+    </div>
+  </section>
+
+  <!-- LOGIN -->
+  <section id="login" class="login-wrap hidden">
+    <div class="login-card">
+      <h1>&#9889; Claude Bridge</h1>
+      <p class="muted">Painel de administra&#231;&#227;o</p>
+      <form id="loginForm">
+        <label>Senha do dashboard</label>
+        <input id="password" type="password" autocomplete="current-password" placeholder="DASHBOARD_PASSWORD" required />
+        <button type="submit">Entrar</button>
+        <div id="loginError" class="error hidden"></div>
+      </form>
+    </div>
+  </section>
+
+  <!-- DASHBOARD -->
+  <main id="app" class="hidden">
+    <header class="topbar">
+      <div class="brand"><span class="logo">&#9889;</span><div><h1>Claude Bridge</h1><span id="statusPill" class="pill pill-ok">online</span></div></div>
+      <div class="actions">
+        <span id="uptime" class="muted">uptime —</span>
+        <button id="refreshBtn">&#8635; Atualizar</button>
+        <button id="resetBtn" class="danger">Zerar m&#233;tricas</button>
+        <button id="logoutBtn" class="ghost">Sair</button>
+      </div>
+    </header>
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="tabMain">Vis&#227;o Geral</button>
+      <button class="tab-btn" data-tab="tabKeys">&#128273; Chaves de API</button>
+      <button class="tab-btn" data-tab="tabUsage">&#128202; Uso Detalhado</button>
+      <button class="tab-btn" data-tab="tabSettings">&#9881; Configurações</button>
+      <button class="tab-btn" data-tab="tabPayments">&#128179; Pagamentos</button>
+    </nav>
+
+    <!-- ============ TAB: MAIN ============ -->
+    <div id="tabMain">
+    <section class="grid grid-4">
+      <div class="card kpi"><span class="kpi-label">Total requisi&#231;&#245;es</span><span id="kpiTotal" class="kpi-value">0</span></div>
+      <div class="card kpi"><span class="kpi-label">Sucesso</span><span id="kpiOk" class="kpi-value good">0</span></div>
+      <div class="card kpi"><span class="kpi-label">Erros</span><span id="kpiErr" class="kpi-value bad">0</span></div>
+      <div class="card kpi"><span class="kpi-label">Retries upstream</span><span id="kpiRetries" class="kpi-value warn">0</span></div>
+    </section>
+
+    <section class="grid grid-3">
+      <div class="card">
+        <h3>Estado do upstream</h3>
+        <div class="row"><span>Chamadas em voo</span><b id="stActive">0</b></div>
+        <div class="row"><span>Falhas consecutivas</span><b id="stFails">0</b></div>
+        <div class="row"><span>Circuit breaker</span><b id="stCircuit" class="pill pill-ok">fechado</b></div>
+        <div class="row"><span>Cooldown restante</span><b id="stCooldown">0 ms</b></div>
+        <div class="row"><span>Aberturas (total)</span><b id="stOpens">0</b></div>
+      </div>
+      <div class="card">
+        <h3>Lat&#234;ncia por rota</h3>
+        <table class="mini"><thead><tr><th>Rota</th><th>Reqs</th><th>OK</th><th>Erros</th><th>M&#233;dia</th></tr></thead><tbody id="routeTable"></tbody></table>
+      </div>
+      <div class="card">
+        <h3>Ambiente</h3>
+        <div class="row"><span>Upstream</span><b id="cfgUpstream" style="font-size:11px;word-break:break-all">—</b></div>
+        <div class="row"><span>Modelo padr&#227;o</span><b id="cfgModel">—</b></div>
+        <div class="row"><span>Concurrency</span><b id="cfgConc">—</b></div>
+        <div class="row"><span>Min interval</span><b id="cfgMin">—</b></div>
+        <div class="row"><span>Timeout</span><b id="cfgTimeout2">—</b></div>
+        <div class="row"><span>Retry mode</span><b id="cfgRetryMode">—</b></div>
+        <div class="row"><span>OpenClaw non-stream</span><b id="cfgOpenClaw">—</b></div>
+        <div class="row"><span>Vers&#227;o Node</span><b id="cfgNode">—</b></div>
+      </div>
+    </section>
+    <section class="grid">
+      <div class="card">
+        <div class="card-header-row"><h3>Error Log <span id="errorLogCount" class="muted small"></span></h3><button id="clearErrorsBtn" class="btn-sm danger">Limpar</button></div>
+        <div class="table-scroll">
+          <table class="mini error-log-table"><thead><tr><th>Hora</th><th>Rota</th><th>Tipo</th><th>Status</th><th>Mensagem</th><th>Retries</th><th>Dura&#231;&#227;o</th></tr></thead><tbody id="errorLogTable"></tbody></table>
+        </div>
+        <p id="errorLogEmpty" class="muted small center" style="padding:12px 0">Nenhum erro registrado.</p>
+      </div>
+    </section>
+
+    <section class="grid grid-3">
+      <div class="card">
+        <h3>Guardrails</h3>
+        <div class="guardrail-item"><div class="guardrail-header"><label class="toggle-wrap"><input type="checkbox" id="grPiiEnabled" class="toggle-input" /><span class="toggle-pill"></span></label><span class="guardrail-name">PII (CPF, email, cart&#227;o, tel)</span><span id="grPiiBlocked" class="pill pill-bad" style="margin-left:auto">0</span></div><div class="guardrail-meta muted small" id="grPiiLast">—</div></div>
+        <div class="guardrail-item"><div class="guardrail-header"><label class="toggle-wrap"><input type="checkbox" id="grMaxTokensEnabled" class="toggle-input" /><span class="toggle-pill"></span></label><span class="guardrail-name">Max tokens</span><span id="grMaxTokensBlocked" class="pill pill-bad" style="margin-left:auto">0</span></div><div class="guardrail-threshold"><label class="muted small">Limite:</label><input type="number" id="grMaxTokensLimit" class="threshold-input" value="8192" min="1" /><button class="btn-sm" id="grMaxTokensSave">Salvar</button></div><div class="guardrail-meta muted small" id="grMaxTokensLast">—</div></div>
+        <div class="guardrail-item"><div class="guardrail-header"><label class="toggle-wrap"><input type="checkbox" id="grBudgetEnabled" class="toggle-input" /><span class="toggle-pill"></span></label><span class="guardrail-name">Budget di&#225;rio</span><span id="grBudgetBlocked" class="pill pill-bad" style="margin-left:auto">0</span></div><div class="guardrail-meta muted small" id="grBudgetLast">—</div></div>
+        <div class="guardrail-item"><div class="guardrail-header"><label class="toggle-wrap"><input type="checkbox" id="grModelSwapEnabled" class="toggle-input" /><span class="toggle-pill"></span></label><span class="guardrail-name">Model swap detection</span><span id="grModelSwapDetected" class="pill pill-warn" style="margin-left:auto">0</span></div><div class="guardrail-meta muted small" id="grModelSwapLast">—</div></div>
+      </div>
+      <div class="card">
+        <div class="card-header-row"><h3>Budget</h3><button id="resetBudgetBtn" class="btn-sm danger">Resetar</button></div>
+        <div class="budget-gauge-wrap"><div class="budget-gauge-bar"><div id="budgetGaugeFill" class="budget-gauge-fill" style="width:0%"></div></div><span id="budgetGaugePct" class="budget-gauge-pct muted small">0%</span></div>
+        <div class="row"><span>Hoje gasto</span><b id="budgetToday">$0.0000</b></div>
+        <div class="row"><span>Total gasto</span><b id="budgetTotal">$0.0000</b></div>
+        <div class="row"><span>Cap di&#225;rio (USD)</span><input type="number" id="budgetDailyCap" class="threshold-input" value="10" min="0.01" step="0.01" style="width:80px" /></div>
+        <h3 style="margin-top:14px">&#218;ltimos 7 dias</h3>
+        <table class="mini"><thead><tr><th>Dia</th><th>Gasto (USD)</th></tr></thead><tbody id="budgetHistoryTable"></tbody></table>
+      </div>
+      <div class="card">
+        <div class="card-header-row"><h3>Model Swap Audit <span id="swapTotal" class="muted small"></span></h3><button id="clearSwapsBtn" class="btn-sm danger">Limpar</button></div>
+        <div class="table-scroll"><table class="mini"><thead><tr><th>Hora</th><th>Rota</th><th>Solicitado</th><th>Retornado</th></tr></thead><tbody id="swapTable"></tbody></table></div>
+        <p id="swapEmpty" class="muted small center" style="padding:12px 0">Nenhum swap detectado.</p>
+      </div>
+    </section>
+    <section class="grid grid-2">
+      <div class="card">
+        <h3>Testar rota</h3>
+        <div class="form-row"><label>Endpoint</label><select id="testEndpoint"><option value="/v1/chat/completions">/v1/chat/completions (n8n / OpenAI)</option><option value="/v1/messages">/v1/messages (OpenClaw / Anthropic)</option></select></div>
+        <div class="form-row"><label>Modelo</label><input id="testModel" value="claude-opus-4-7" /></div>
+        <div class="form-row"><label>Mensagem</label><textarea id="testPrompt" rows="3">Responda apenas: ok</textarea></div>
+        <div class="form-row inline"><label><input type="checkbox" id="testStream" /> stream</label><button id="testRunBtn">Enviar teste</button></div>
+        <pre id="testOut" class="output">—</pre>
+      </div>
+      <div class="card">
+        <h3>Atividade recente</h3>
+        <table class="mini sticky"><thead><tr><th>Hora</th><th>M&#233;todo</th><th>Rota</th><th>Status</th><th>Lat&#234;ncia</th><th></th></tr></thead><tbody id="recentTable"></tbody></table>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <div class="card-header-row">
+          <h3>&#128279; Como conectar</h3>
+          <span id="connectBaseUrl" class="muted small"></span>
+        </div>
+        <p class="muted small" style="margin:0 0 12px 0">A senha do bridge serve como API key em todos os provedores abaixo. Clique em qualquer campo para copiar.</p>
+        <div class="connect-tabs">
+          <button class="connect-tab active" data-provider="n8n">n8n</button>
+          <button class="connect-tab" data-provider="openai">OpenAI compat</button>
+          <button class="connect-tab" data-provider="anthropic">Anthropic compat</button>
+          <button class="connect-tab" data-provider="openclaw">OpenClaw</button>
+          <button class="connect-tab" data-provider="cursor">Cursor / VS Code</button>
+        </div>
+        <div id="connectPanel" class="connect-panel"></div>
+      </div>
+    </section>
+
+    <footer class="muted small center">Claude Bridge v1.3.0-infinite-retry · OpenAI &#8644; Anthropic · retry infinito, circuit breaker, guardrails e dashboard</footer>
+    </div><!-- /tabMain -->
+    <!-- ============ TAB: KEYS ============ -->
+    <div id="tabKeys" class="hidden">
+    <section class="grid">
+      <div class="card">
+        <div class="card-header-row">
+          <h3>Chaves de API</h3>
+          <button id="createKeyBtn" class="btn-sm">+ Nova chave</button>
+        </div>
+        <p class="muted small">Crie chaves para rastrear uso por cliente/app. Cada chave funciona como Bearer token para chamar o bridge.</p>
+        <div id="keysList"></div>
+        <div id="newKeyResult" class="hidden" style="margin-top:12px;padding:12px;background:#0c1322;border:1px solid var(--border);border-radius:8px">
+          <p class="small" style="margin:0 0 6px"><b>Chave criada (copie agora — não será exibida novamente):</b></p>
+          <code id="newKeyValue" style="font-size:13px;word-break:break-all"></code>
+          <button class="btn-sm" style="margin-top:8px" onclick="copyText(this,document.getElementById('newKeyValue').textContent)">Copiar</button>
+        </div>
+      </div>
+    </section>
+    <section class="grid">
+      <div class="card">
+        <div class="card-header-row">
+          <h3>Log de erros detalhado</h3>
+          <span id="detailErrorCount" class="muted small"></span>
+        </div>
+        <div class="table-scroll" style="max-height:400px">
+          <table class="mini"><thead><tr><th>Hora</th><th>Chave</th><th>Modelo</th><th>Rota</th><th>Status</th><th>Upstream</th><th>Request ID</th><th>Tentativa</th><th>Mensagem</th></tr></thead><tbody id="detailErrorTable"></tbody></table>
+        </div>
+        <p id="detailErrorEmpty" class="muted small center" style="padding:12px 0">Nenhum erro registrado.</p>
+      </div>
+    </section>
+    </div><!-- /tabKeys -->
+
+    <!-- ============ TAB: USAGE ============ -->
+    <div id="tabUsage" class="hidden">
+    <section class="grid grid-4" style="grid-template-columns:repeat(5,1fr)">
+      <div class="card kpi"><span class="kpi-label">Custo hoje (USD)</span><span id="usageTodayCost" class="kpi-value">$0.00</span></div>
+      <div class="card kpi"><span class="kpi-label">Custo m&#234;s (USD)</span><span id="usageMonthCost" class="kpi-value">$0.00</span></div>
+      <div class="card kpi"><span class="kpi-label">Tokens totais</span><span id="usageTotalTokens" class="kpi-value">0</span></div>
+      <div class="card kpi"><span class="kpi-label">Requests hoje</span><span id="usageTodayReqs" class="kpi-value">0</span></div>
+      <div class="card kpi"><span class="kpi-label">M&#233;dia custo/req</span><span id="usageAvgCost" class="kpi-value">$0.00</span></div>
+    </section>
+    <section class="grid">
+      <div class="card">
+        <h3>Uso por API Key</h3>
+        <div class="table-scroll">
+          <table class="mini"><thead><tr><th>Chave</th><th>Requests</th><th>Tokens In</th><th>Tokens Out</th><th>Custo (USD)</th><th>&#218;ltimo uso</th><th>Erros</th><th>Lat&#234;ncia m&#233;dia</th></tr></thead><tbody id="usageByKeyTable"></tbody></table>
+        </div>
+        <p id="usageByKeyEmpty" class="muted small center" style="padding:12px 0">Sem dados de uso.</p>
+      </div>
+    </section>
+    <section class="grid">
+      <div class="card">
+        <h3>Log de requests (&#250;ltimos 100)</h3>
+        <div class="table-scroll" style="max-height:500px">
+          <table class="mini"><thead><tr><th>Hora</th><th>Chave</th><th>Modelo</th><th>Rota</th><th>Upstream</th><th>Tokens In</th><th>Tokens Out</th><th>Custo</th><th>Lat&#234;ncia</th><th>Status</th><th>Request ID</th></tr></thead><tbody id="usageLogTable"></tbody></table>
+        </div>
+        <p id="usageLogEmpty" class="muted small center" style="padding:12px 0">Sem registros.</p>
+      </div>
+    </section>
+    </div><!-- /tabUsage -->
+
+    <!-- ============ TAB: SETTINGS ============ -->
+    <div id="tabSettings" class="hidden">
+    <section class="grid">
+      <div class="card">
+        <div class="card-header-row"><h3>Upstreams (APIs)</h3><button id="addUpstreamBtn" class="btn-sm">+ Adicionar</button></div>
+        <p class="muted small">Configure um ou mais provedores. O bridge tenta em ordem; se um falhar, vai para o pr&#243;ximo.</p>
+        <div id="upstreamsList"></div>
+        <div id="upstreamForm" class="upstream-form hidden">
+          <h4 id="ufTitle">Novo upstream</h4>
+          <input type="hidden" id="ufId" value="" />
+          <div class="form-row"><label>Nome</label><input type="text" id="ufName" placeholder="ex: AIGoCode CC" /></div>
+          <div class="form-row"><label>Base URL</label><input type="text" id="ufUrl" placeholder="https://api.aigocode.com" /></div>
+          <div class="form-row"><label>API Key</label><input type="password" id="ufKey" placeholder="sk-..." /></div>
+          <div class="form-row"><label>Prioridade (1=mais barato)</label><input type="number" id="ufPriority" min="1" max="99" value="10" /></div>
+          <div class="form-row"><label>Vendor</label><select id="ufVendor"><option value="anthropic">Anthropic (Claude)</option><option value="openai">OpenAI (GPT)</option><option value="google">Google (Gemini)</option></select></div>
+          <div class="form-row"><label>Fallback Model (só cross-vendor)</label><input type="text" id="ufFallbackModel" placeholder="ex: gpt-5.5 (vazio se não é fallback)" /></div>
+          <div class="form-row inline">
+            <label><input type="checkbox" id="ufEnabled" checked /> Ativo</label>
+            <button id="ufSaveBtn" class="btn-sm">Salvar</button>
+            <button id="ufCancelBtn" class="btn-sm ghost">Cancelar</button>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="grid grid-2">
+      <div class="card">
+        <h3>Bridge</h3>
+        <div class="form-row"><label>Modelo padr&#227;o</label><input type="text" id="cfgDefaultModel" /></div>
+        <div class="form-row"><label>Retry infinito</label><label class="toggle-wrap"><input type="checkbox" id="cfgInfiniteRetry" class="toggle-input" /><span class="toggle-pill"></span></label></div>
+        <div class="form-row"><label>Max delay (ms)</label><input type="number" id="cfgMaxDelay" /></div>
+        <div class="form-row"><label>Max concurrency</label><input type="number" id="cfgMaxConc" /></div>
+        <div class="form-row"><label>Min interval (ms)</label><input type="number" id="cfgMinInterval" /></div>
+        <div class="form-row"><label>Timeout (ms)</label><input type="number" id="cfgTimeout" /></div>
+        <div class="form-row"><label>Circuit failures</label><input type="number" id="cfgCircuitFail" /></div>
+        <div class="form-row"><label>Circuit cooldown (ms)</label><input type="number" id="cfgCircuitCool" /></div>
+        <button id="saveBridgeCfgBtn">Salvar</button>
+        <span id="bridgeCfgMsg" class="muted small"></span>
+      </div>
+      <div class="card">
+        <h3>Senha do painel</h3>
+        <div class="form-row"><label>Nova senha</label><input type="password" id="cfgNewPass" placeholder="deixe vazio para n&#227;o alterar" /></div>
+        <button id="savePassBtn">Alterar senha</button>
+        <span id="passCfgMsg" class="muted small"></span>
+      </div>
+    </section>
+    </div><!-- /tabSettings -->
+
+    <!-- ============ TAB: PAYMENTS ============ -->
+    <div id="tabPayments" class="hidden">
+      <section class="grid">
+        <div class="box">
+          <h3>Pedidos Pendentes</h3>
+          <div id="pendingPayments"><p class="muted">Carregando...</p></div>
+        </div>
+      </section>
+      <section class="grid">
+        <div class="box">
+          <h3>Confirmados Recentes</h3>
+          <div id="recentPayments"><p class="muted">Nenhum</p></div>
+        </div>
+      </section>
+    </div>
+
+  </main>
+
+  <!-- ERROR DETAIL MODAL -->
+  <div id="errorModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="Detalhe do erro">
+    <div class="modal-card">
+      <div class="modal-header"><h2>Detalhe do Erro</h2><button id="modalCloseBtn" class="modal-close" aria-label="Fechar">&times;</button></div>
+      <div id="modalBody" class="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="/dev/app.js"></script>
+</body>
+</html>
