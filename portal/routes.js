@@ -510,6 +510,100 @@ router.put('/admin/asaas-toggle', requireAdmin, (req, res) => {
   res.json({ ok: true, enabled: getAsaasConfig().enabled });
 });
 
+// GET /portal/admin/asaas-diag/:keyId — diagnostic: test Asaas API step-by-step
+router.get('/admin/asaas-diag/:keyId', requireAdmin, async (req, res) => {
+  const key = findKeyById(req.params.keyId);
+  if (!key) return res.status(404).json({ error: 'Key not found' });
+
+  const baseUrl = key.sandbox ? 'https://sandbox.asaas.com/api/v3' : 'https://api.asaas.com/v3';
+  const steps = [];
+
+  async function asaasFetch(path, options = {}) {
+    return fetch(baseUrl + path, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', 'access_token': key.apiKey, ...(options.headers || {}) },
+    });
+  }
+
+  // Step 1: auth check
+  try {
+    const r = await asaasFetch('/customers?limit=1');
+    const body = await r.text();
+    steps.push({ step: 'auth', httpStatus: r.status, ok: r.ok, errorBody: r.ok ? null : body.slice(0, 500) });
+    if (!r.ok) return res.json({ baseUrl, steps });
+  } catch (e) {
+    steps.push({ step: 'auth', httpStatus: 0, ok: false, errorBody: e.message });
+    return res.json({ baseUrl, steps });
+  }
+
+  // Step 2: create test customer
+  const randEmail = 'diag-' + Math.random().toString(36).slice(2, 8) + '@test.com';
+  let customerId = null;
+  try {
+    const r = await asaasFetch('/customers', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Diag Test', email: randEmail, cpfCnpj: '24971563792' }),
+    });
+    const body = await r.text();
+    if (r.ok) {
+      const data = JSON.parse(body);
+      customerId = data.id;
+      steps.push({ step: 'createCustomer', httpStatus: r.status, ok: true, customerId });
+    } else {
+      steps.push({ step: 'createCustomer', httpStatus: r.status, ok: false, errorBody: body.slice(0, 500) });
+      return res.json({ baseUrl, steps });
+    }
+  } catch (e) {
+    steps.push({ step: 'createCustomer', httpStatus: 0, ok: false, errorBody: e.message });
+    return res.json({ baseUrl, steps });
+  }
+
+  // Step 3: create PIX payment (R$1.00)
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  let paymentId = null;
+  try {
+    const r = await asaasFetch('/payments', {
+      method: 'POST',
+      body: JSON.stringify({
+        customer: customerId,
+        billingType: 'PIX',
+        value: 1.00,
+        dueDate: tomorrow,
+        externalReference: 'diag-test',
+        description: 'Bridge diagnostico',
+      }),
+    });
+    const body = await r.text();
+    if (r.ok) {
+      const data = JSON.parse(body);
+      paymentId = data.id;
+      steps.push({ step: 'createPayment', httpStatus: r.status, ok: true, paymentId, paymentStatus: data.status });
+    } else {
+      steps.push({ step: 'createPayment', httpStatus: r.status, ok: false, errorBody: body.slice(0, 500) });
+      return res.json({ baseUrl, steps });
+    }
+  } catch (e) {
+    steps.push({ step: 'createPayment', httpStatus: 0, ok: false, errorBody: e.message });
+    return res.json({ baseUrl, steps });
+  }
+
+  // Step 4: get PIX QR code
+  try {
+    const r = await asaasFetch('/payments/' + paymentId + '/pixQrCode');
+    const body = await r.text();
+    if (r.ok) {
+      const data = JSON.parse(body);
+      steps.push({ step: 'pixQrCode', httpStatus: r.status, ok: true, hasEncodedImage: !!data.encodedImage, hasPayload: !!data.payload });
+    } else {
+      steps.push({ step: 'pixQrCode', httpStatus: r.status, ok: false, errorBody: body.slice(0, 500) });
+    }
+  } catch (e) {
+    steps.push({ step: 'pixQrCode', httpStatus: 0, ok: false, errorBody: e.message });
+  }
+
+  res.json({ baseUrl, keyId: key.id, label: key.label, sandbox: key.sandbox, contaPF: key.contaPF, steps });
+});
+
 // ── Asaas webhook (PUBLIC — ALWAYS returns HTTP 200) ──
 // URL: POST /portal/webhook/asaas/:keyId
 //
