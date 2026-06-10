@@ -10,6 +10,7 @@ import cookieParser from "cookie-parser";
 import portalRouter, { setCostConfig, getCostConfig } from './portal/routes.js';
 import { setAsaasConfig, getAsaasConfig } from './portal/asaas.js';
 import { initPlans, getPlans, getScenarioMix, getMinMargin, getSeedVersion } from './portal/plans-store.js';
+import { registerPersist } from './portal/config-persist.js';
 import { checkPlanLimits, recordPortalUsage, setQuotaConfig, getQuotaConfig } from './portal/ratelimit.js';
 import { backfillSnapshots } from './portal/billing.js';
 import { initDB } from './portal/db.js';
@@ -168,6 +169,17 @@ setInterval(() => {
     if (changed) saveConfig(config);
   } catch {}
 }, 5000);
+
+// Register immediate-persist callback for all config modules
+registerPersist(() => {
+  config.asaas = getAsaasConfig();
+  config.plans = getPlans();
+  config.scenarioMix = getScenarioMix();
+  config.minMarginPct = getMinMargin();
+  config.quotaConfig = getQuotaConfig();
+  config.costConfig = getCostConfig();
+  saveConfig(config);
+});
 
 // Env var DASHBOARD_PASSWORD é fonte de verdade: se definida, sobrepõe o
 // valor persistido em config.json (unifica painel /dev, proxy e portal).

@@ -15,6 +15,7 @@ import {
   getAsaasConfig, setAsaasConfig, getKeysMasked,
   addKey, updateKey, removeKey, findKeyById
 } from './asaas.js';
+import { persistNow } from './config-persist.js';
 import {
   getPlans, getPlansDict, getPlanOrder,
   addPlan, updatePlan, removePlan, findPlan,
@@ -281,7 +282,7 @@ router.get('/admin/quota-config', requireAdmin, (req, res) => {
 router.put('/admin/quota-config', requireAdmin, (req, res) => {
   const cfg = req.body || {};
   setQuotaConfig(cfg);
-  // Persist to config.json via parent (caller saves config externally)
+  persistNow();
   res.json({ ok: true, config: getQuotaConfig() });
 });
 
@@ -307,6 +308,7 @@ router.get('/admin/cost-config', requireAdmin, (req, res) => {
 router.put('/admin/cost-config', requireAdmin, (req, res) => {
   const cfg = req.body || {};
   setCostConfig(cfg);
+  persistNow();
   res.json({ ok: true, config: getCostConfig() });
 });
 
@@ -412,6 +414,7 @@ router.post('/admin/plans-config', requireAdmin, (req, res) => {
   }
 
   const created = addPlan(data);
+  persistNow();
   const warning = scenarios.worstCase.margin_brl < 0 ? 'Atenção: margem negativa no pior caso' : null;
   res.json({ ok: true, plan: { ...created, scenarios }, warning });
 });
@@ -438,6 +441,7 @@ router.put('/admin/plans-config/:id', requireAdmin, (req, res) => {
   }
 
   const updated = updatePlan(req.params.id, patch);
+  persistNow();
   const warning = scenarios.worstCase.margin_brl < 0 ? 'Atenção: margem negativa no pior caso' : null;
   res.json({ ok: true, plan: { ...updated, scenarios }, warning });
 });
@@ -446,6 +450,7 @@ router.put('/admin/plans-config/:id', requireAdmin, (req, res) => {
 router.delete('/admin/plans-config/:id', requireAdmin, (req, res) => {
   const ok = removePlan(req.params.id);
   if (!ok) return res.status(404).json({ error: 'Plano não encontrado' });
+  persistNow();
   res.json({ ok: true });
 });
 
@@ -454,6 +459,7 @@ router.put('/admin/plans-scenarios', requireAdmin, (req, res) => {
   const { scenarioMix: mix, minMarginPct: mm } = req.body || {};
   if (mix) setScenarioMix(mix);
   if (typeof mm === 'number') setMinMargin(mm);
+  persistNow();
   res.json({ ok: true, scenarioMix: getScenarioMix(), minMarginPct: getMinMargin() });
 });
 
@@ -476,6 +482,7 @@ router.post('/admin/asaas-keys', requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'label, apiKey e webhookToken são obrigatórios' });
   }
   const id = addKey(label, apiKey, webhookToken, sandbox !== false, contaPF !== false, enabled !== false);
+  persistNow();
   res.json({ ok: true, id });
 });
 
@@ -483,6 +490,7 @@ router.post('/admin/asaas-keys', requireAdmin, (req, res) => {
 router.put('/admin/asaas-keys/:id', requireAdmin, (req, res) => {
   const ok = updateKey(req.params.id, req.body || {});
   if (!ok) return res.status(404).json({ error: 'Chave não encontrada' });
+  persistNow();
   res.json({ ok: true });
 });
 
@@ -490,6 +498,7 @@ router.put('/admin/asaas-keys/:id', requireAdmin, (req, res) => {
 router.delete('/admin/asaas-keys/:id', requireAdmin, (req, res) => {
   const ok = removeKey(req.params.id);
   if (!ok) return res.status(404).json({ error: 'Chave não encontrada' });
+  persistNow();
   res.json({ ok: true });
 });
 
@@ -497,6 +506,7 @@ router.delete('/admin/asaas-keys/:id', requireAdmin, (req, res) => {
 router.put('/admin/asaas-toggle', requireAdmin, (req, res) => {
   const { enabled } = req.body || {};
   setAsaasConfig({ enabled: !!enabled });
+  persistNow();
   res.json({ ok: true, enabled: getAsaasConfig().enabled });
 });
 
