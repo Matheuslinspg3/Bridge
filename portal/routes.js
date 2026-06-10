@@ -12,9 +12,9 @@ import {
 } from './billing.js';
 import { getDailyUsage, getMonthlyUsage, getQuotaConfig, setQuotaConfig, computeEffectiveQuota } from './ratelimit.js';
 import {
-  getAbacateConfig, setAbacateConfig, getKeysMasked,
+  getAsaasConfig, setAsaasConfig, getKeysMasked,
   addKey, updateKey, removeKey, findKeyById
-} from './abacate.js';
+} from './asaas.js';
 import {
   getPlans, getPlansDict, getPlanOrder,
   addPlan, updatePlan, removePlan, findPlan,
@@ -415,11 +415,11 @@ router.put('/admin/plans-scenarios', requireAdmin, (req, res) => {
   res.json({ ok: true, scenarioMix: getScenarioMix(), minMarginPct: getMinMargin() });
 });
 
-// ── AbacatePay admin: key management ──
+// ── Asaas admin: key management ──
 
-// GET /portal/admin/abacate-keys
-router.get('/admin/abacate-keys', requireAdmin, (req, res) => {
-  const cfg = getAbacateConfig();
+// GET /portal/admin/asaas-keys
+router.get('/admin/asaas-keys', requireAdmin, (req, res) => {
+  const cfg = getAsaasConfig();
   res.json({
     enabled: cfg.enabled,
     keys: getKeysMasked(),
@@ -427,82 +427,94 @@ router.get('/admin/abacate-keys', requireAdmin, (req, res) => {
   });
 });
 
-// POST /portal/admin/abacate-keys — add key
-router.post('/admin/abacate-keys', requireAdmin, (req, res) => {
-  const { label, apiKey, webhookSecret, enabled } = req.body || {};
-  if (!label || !apiKey || !webhookSecret) {
-    return res.status(400).json({ error: 'label, apiKey e webhookSecret são obrigatórios' });
+// POST /portal/admin/asaas-keys — add key
+router.post('/admin/asaas-keys', requireAdmin, (req, res) => {
+  const { label, apiKey, webhookToken, sandbox, contaPF, enabled } = req.body || {};
+  if (!label || !apiKey || !webhookToken) {
+    return res.status(400).json({ error: 'label, apiKey e webhookToken são obrigatórios' });
   }
-  const id = addKey(label, apiKey, webhookSecret, enabled !== false);
+  const id = addKey(label, apiKey, webhookToken, sandbox !== false, contaPF !== false, enabled !== false);
   res.json({ ok: true, id });
 });
 
-// PUT /portal/admin/abacate-keys/:id — update key
-router.put('/admin/abacate-keys/:id', requireAdmin, (req, res) => {
+// PUT /portal/admin/asaas-keys/:id — update key
+router.put('/admin/asaas-keys/:id', requireAdmin, (req, res) => {
   const ok = updateKey(req.params.id, req.body || {});
   if (!ok) return res.status(404).json({ error: 'Chave não encontrada' });
   res.json({ ok: true });
 });
 
-// DELETE /portal/admin/abacate-keys/:id — remove key
-router.delete('/admin/abacate-keys/:id', requireAdmin, (req, res) => {
+// DELETE /portal/admin/asaas-keys/:id — remove key
+router.delete('/admin/asaas-keys/:id', requireAdmin, (req, res) => {
   const ok = removeKey(req.params.id);
   if (!ok) return res.status(404).json({ error: 'Chave não encontrada' });
   res.json({ ok: true });
 });
 
-// PUT /portal/admin/abacate-toggle — enable/disable global
-router.put('/admin/abacate-toggle', requireAdmin, (req, res) => {
+// PUT /portal/admin/asaas-toggle — enable/disable global
+router.put('/admin/asaas-toggle', requireAdmin, (req, res) => {
   const { enabled } = req.body || {};
-  setAbacateConfig({ enabled: !!enabled });
-  res.json({ ok: true, enabled: getAbacateConfig().enabled });
+  setAsaasConfig({ enabled: !!enabled });
+  res.json({ ok: true, enabled: getAsaasConfig().enabled });
 });
 
-// ── AbacatePay webhook (PUBLIC, validated by keyId + webhookSecret) ──
-// URL pattern: /portal/webhook/abacatepay/:keyId
-// Security: the webhook URL is unique per key. We validate that the keyId exists
-// and that the request contains the correct webhookSecret in the x-webhook-secret header.
-// Each AbacatePay account is configured to send webhooks to its own URL.
-router.post('/webhook/abacatepay/:keyId', async (req, res) => {
+// ── Asaas webhook (PUBLIC, validated by keyId + webhookToken) ──
+// URL: POST /portal/webhook/asaas/:keyId
+// Security: validates asaas-access-token header against the key's webhookToken.
+// PF safety: contaPF=true → only RECEIVED triggers confirmOrder (not CONFIRMED).
+router.post('/webhook/asaas/:keyId', async (req, res) => {
   const { keyId } = req.params;
   const key = findKeyById(keyId);
   if (!key) return res.status(404).json({ error: 'Unknown key' });
 
-  // Validate webhook secret via header
-  const incomingSecret = req.headers['x-webhook-secret'] || req.query.secret || '';
-  if (!incomingSecret || incomingSecret !== key.webhookSecret) {
-    return res.status(403).json({ error: 'Invalid webhook secret' });
+  // Validate webhook token
+  const incomingToken = req.headers['asaas-access-token'] || req.headers['x-webhook-token'] || '';
+  if (!incomingToken || incomingToken !== key.webhookToken) {
+    return res.status(403).json({ error: 'Invalid webhook token' });
   }
 
-  // Process the event
-  const { data } = req.body || {};
-  if (!data || !data.id) return res.status(200).json({ ok: true }); // Ignore malformed
+  const { event, payment } = req.body || {};
+  if (!payment || !payment.id) return res.status(200).json({ ok: true });
 
-  const chargeId = data.id;
-  const status = data.status; // PENDING, PAID, EXPIRED, CANCELLED, UNDER_DISPUTE, REFUNDED
+  const paymentId = payment.id;
+  const status = payment.status; // PENDING, RECEIVED, CONFIRMED, REFUNDED, OVERDUE...
 
-  // Find the order by charge id
-  const order = queryOne('SELECT * FROM orders WHERE abacate_charge_id = ?', [chargeId]);
+  // Find order by asaas_payment_id or externalReference
+  let order = queryOne('SELECT * FROM orders WHERE asaas_payment_id = ?', [paymentId]);
+  if (!order && payment.externalReference) {
+    order = queryOne('SELECT * FROM orders WHERE id = ?', [Number(payment.externalReference)]);
+  }
   if (!order) return res.status(200).json({ ok: true, note: 'order not found' });
 
-  if (status === 'PAID') {
-    // Idempotency: don't confirm twice
+  // PF safety: CONFIRMED is provisional for PF accounts (72h antifraude)
+  // Only confirm on RECEIVED for PF; PJ accepts both CONFIRMED and RECEIVED
+  const isConfirmEvent = event === 'PAYMENT_RECEIVED' || event === 'PAYMENT_CONFIRMED';
+  const shouldConfirm = (() => {
+    if (status === 'RECEIVED') return true;
+    if (status === 'CONFIRMED' && !key.contaPF) return true; // PJ: accept CONFIRMED
+    return false;
+  })();
+
+  if (isConfirmEvent && shouldConfirm) {
     if (order.status === 'confirmed') return res.status(200).json({ ok: true, note: 'already confirmed' });
     try {
       confirmOrder(order.id);
     } catch (err) {
-      console.error('[webhook/abacatepay] confirmOrder error:', err.message);
+      console.error('[webhook/asaas] confirmOrder error:', err.message);
     }
-  } else if (['CANCELLED', 'EXPIRED'].includes(status)) {
-    if (order.status === 'pending') {
-      run(`UPDATE orders SET status = 'cancelled', rejected_at = datetime('now') WHERE id = ?`, [order.id]);
+  } else if (status === 'CONFIRMED' && key.contaPF) {
+    // PF: CONFIRMED is provisional — do NOT confirm, just log
+    // Payment is still under fraud analysis (up to 72h)
+    // Will be confirmed when RECEIVED arrives
+  } else if (['REFUNDED', 'REFUND_REQUESTED'].includes(status) || event === 'PAYMENT_REFUNDED') {
+    if (order.status === 'confirmed') {
+      run(`UPDATE orders SET status = 'refunded' WHERE id = ?`, [order.id]);
+      run(`UPDATE subscriptions SET active = 0 WHERE user_id = ? AND plan_id = ?`, [order.user_id, order.plan_id]);
       saveDB();
     }
-  } else if (['UNDER_DISPUTE', 'REFUNDED'].includes(status)) {
-    // If already confirmed, deactivate subscription
-    if (order.status === 'confirmed') {
-      run(`UPDATE orders SET status = ? WHERE id = ?`, [status.toLowerCase(), order.id]);
-      run(`UPDATE subscriptions SET active = 0 WHERE user_id = ? AND plan_id = ?`, [order.user_id, order.plan_id]);
+  } else if (status === 'OVERDUE' || event === 'PAYMENT_OVERDUE') {
+    if (order.status === 'pending') {
+      run(`UPDATE orders SET status = 'expired', rejected_at = datetime('now') WHERE id = ?`, [order.id]);
       saveDB();
     }
   }

@@ -1,7 +1,7 @@
 import { queryAll, queryOne, run, saveDB } from './db.js';
 import { generatePixQRCode } from './pix.js';
 import { notifyNewOrder } from './notify.js';
-import { getAbacateConfig, getNextKey, createAbacateCharge } from './abacate.js';
+import { getAsaasConfig, getNextKey, ensureCustomer, createAsaasPayment } from './asaas.js';
 
 import { getPlansDict, getPlanOrder } from './plans-store.js';
 
@@ -75,33 +75,37 @@ export async function createOrder(userId, planId) {
 
   const amount = plan.price + randomCents();
 
-  // Try AbacatePay if enabled, else fallback to static PIX
-  const abConfig = getAbacateConfig();
-  if (abConfig.enabled) {
+  // Try Asaas if enabled, else fallback to static PIX
+  const asaasConfig = getAsaasConfig();
+  if (asaasConfig.enabled) {
     const key = getNextKey();
     if (key) {
       try {
-        // Insert order first to get ID for externalId
-        const result = run(
-          `INSERT INTO orders (user_id, plan_id, amount_brl, pix_payload, status) VALUES (?, ?, ?, ?, 'pending')`,
-          [userId, planId, amount, '']
+        const user = queryOne('SELECT * FROM users WHERE id = ?', [userId]);
+        const customerId = await ensureCustomer(key, user);
+
+        // Create a temporary order ID for externalReference
+        const tempResult = run(
+          `INSERT INTO orders (user_id, plan_id, amount_brl, pix_payload, status) VALUES (?, ?, ?, '', 'pending')`,
+          [userId, planId, amount]
         );
-        const orderId = result.lastInsertRowid;
+        const orderId = tempResult.lastInsertRowid;
 
-        const charge = await createAbacateCharge(key, amount, orderId);
+        const payment = await createAsaasPayment(key, customerId, amount, orderId);
 
-        // Update order with AbacatePay data
-        run(`UPDATE orders SET pix_payload = ?, abacate_charge_id = ?, abacate_key_id = ? WHERE id = ?`,
-          [charge.brCode, charge.chargeId, key.id, orderId]);
+        // Update order with Asaas data
+        run(`UPDATE orders SET pix_payload = ?, asaas_payment_id = ?, asaas_key_id = ? WHERE id = ?`,
+          [payment.brCode, payment.paymentId, key.id, orderId]);
         saveDB();
 
         const order = queryOne('SELECT * FROM orders WHERE id = ?', [orderId]);
-        const user = queryOne('SELECT * FROM users WHERE id = ?', [userId]);
         notifyNewOrder(order, user).catch(() => {});
 
-        return { order, qrDataUrl: charge.brCodeBase64, payload: charge.brCode };
+        return { order, qrDataUrl: payment.qrDataUrl, payload: payment.brCode };
       } catch (err) {
-        console.error('[abacatepay] Charge creation failed, falling back to static PIX:', err.message);
+        console.error('[asaas] Payment creation failed, falling back to static PIX:', err.message);
+        // Delete the dangling order if it was created
+        try { const lastId = queryOne("SELECT id FROM orders WHERE user_id = ? AND pix_payload = '' AND status = 'pending' ORDER BY id DESC LIMIT 1", [userId]); if (lastId) run('DELETE FROM orders WHERE id = ?', [lastId.id]); } catch {}
         // Fall through to static PIX
       }
     }
