@@ -316,6 +316,20 @@
       </section>
       <section class="grid">
         <div class="box">
+          <h3>Config de cotas (baldes semanais)</h3>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+            <label style="font-size:12px">Teto diário divisor<input id="qcTetoDiario" value="5" style="width:40px;margin-left:4px"></label>
+            <label style="font-size:12px">Throttle %<input id="qcThrottle" value="0.70" style="width:50px;margin-left:4px"></label>
+            <label style="font-size:12px">Peso última sem.<input id="qcPesoUltima" value="1.5" style="width:50px;margin-left:4px"></label>
+            <label style="font-size:12px">Forfeit sem.1<input id="qcForfeit1" value="1.0" style="width:50px;margin-left:4px"></label>
+            <label style="font-size:12px">Forfeit sem.2-3<input id="qcForfeitMeio" value="0.5" style="width:50px;margin-left:4px"></label>
+          </div>
+          <button class="btn-sm" onclick="saveQuotaConfig()">Salvar config cotas</button>
+          <span id="qcStatus" style="font-size:12px;margin-left:8px"></span>
+        </div>
+      </section>
+      <section class="grid">
+        <div class="box">
           <h3>Por conta</h3>
           <div class="table-scroll">
             <table class="mini"><thead><tr><th>Email</th><th>Plano</th><th>Receita R$</th><th>Input</th><th>Output</th><th>CacheW</th><th>CacheR</th><th>Custo R$</th><th>Margem R$</th><th>%</th></tr></thead>

@@ -963,3 +963,44 @@ async function loadProfit() {
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => { if (btn.dataset.tab === 'tabProfit') loadProfit(); });
 });
+
+/* ---- Quota Config ---- */
+async function loadQuotaConfig() {
+  const token = getToken();
+  try {
+    const res = await fetch("/portal/admin/quota-config", { headers: { "x-dashboard-token": token } });
+    if (!res.ok) return;
+    const cfg = await res.json();
+    if (cfg.tetoDiarioDivisor !== undefined) document.getElementById('qcTetoDiario').value = cfg.tetoDiarioDivisor;
+    if (cfg.throttleThreshold !== undefined) document.getElementById('qcThrottle').value = cfg.throttleThreshold;
+    if (cfg.pesoUltimaSemana !== undefined) document.getElementById('qcPesoUltima').value = cfg.pesoUltimaSemana;
+    if (cfg.forfeitSemana1 !== undefined) document.getElementById('qcForfeit1').value = cfg.forfeitSemana1;
+    if (cfg.forfeitSemanasMeio !== undefined) document.getElementById('qcForfeitMeio').value = cfg.forfeitSemanasMeio;
+  } catch {}
+}
+
+async function saveQuotaConfig() {
+  const token = getToken();
+  const cfg = {
+    tetoDiarioDivisor: Number(document.getElementById('qcTetoDiario').value) || 5,
+    throttleThreshold: Number(document.getElementById('qcThrottle').value) || 0.70,
+    pesoUltimaSemana: Number(document.getElementById('qcPesoUltima').value) || 1.5,
+    forfeitSemana1: Number(document.getElementById('qcForfeit1').value) || 1.0,
+    forfeitSemanasMeio: Number(document.getElementById('qcForfeitMeio').value) || 0.5,
+  };
+  try {
+    const res = await fetch("/portal/admin/quota-config", {
+      method: "PUT", headers: { "x-dashboard-token": token, "Content-Type": "application/json" },
+      body: JSON.stringify(cfg)
+    });
+    const data = await res.json();
+    document.getElementById('qcStatus').textContent = data.ok ? '✓ Salvo' : '✗ Erro';
+    setTimeout(() => document.getElementById('qcStatus').textContent = '', 3000);
+  } catch (e) { document.getElementById('qcStatus').textContent = '✗ ' + e.message; }
+}
+
+// Load quota config when profit tab opens
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  const orig = btn._profitListener;
+  btn.addEventListener('click', () => { if (btn.dataset.tab === 'tabProfit') loadQuotaConfig(); });
+});

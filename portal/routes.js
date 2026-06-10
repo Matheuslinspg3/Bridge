@@ -10,7 +10,7 @@ import {
   getPendingOrders, getRecentConfirmed,
   expireSubscriptions
 } from './billing.js';
-import { getDailyUsage, getMonthlyUsage } from './ratelimit.js';
+import { getDailyUsage, getMonthlyUsage, getQuotaConfig, setQuotaConfig, computeEffectiveQuota } from './ratelimit.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -179,6 +179,19 @@ router.post('/admin/payments/:id/reject', requireAdmin, (req, res) => {
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+// GET /portal/admin/quota-config
+router.get('/admin/quota-config', requireAdmin, (req, res) => {
+  res.json(getQuotaConfig());
+});
+
+// PUT /portal/admin/quota-config
+router.put('/admin/quota-config', requireAdmin, (req, res) => {
+  const cfg = req.body || {};
+  setQuotaConfig(cfg);
+  // Persist to config.json via parent (caller saves config externally)
+  res.json({ ok: true, config: getQuotaConfig() });
 });
 
 // GET /portal/admin/profit — aggregate usage & revenue per account
