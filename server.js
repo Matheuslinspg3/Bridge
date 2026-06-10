@@ -8,7 +8,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import cookieParser from "cookie-parser";
 import portalRouter, { setCostConfig, getCostConfig } from './portal/routes.js';
-import { setAbacateConfig, getAbacateConfig } from './portal/abacate.js';
+import { setAsaasConfig, getAsaasConfig } from './portal/asaas.js';
 import { initPlans, getPlans, getScenarioMix, getMinMargin, getSeedVersion } from './portal/plans-store.js';
 import { checkPlanLimits, recordPortalUsage, setQuotaConfig, getQuotaConfig } from './portal/ratelimit.js';
 import { backfillSnapshots } from './portal/billing.js';
@@ -137,7 +137,7 @@ let config = loadConfig();
 // Load quotaConfig from config.json if present
 if (config.quotaConfig) setQuotaConfig(config.quotaConfig);
 if (config.costConfig) setCostConfig(config.costConfig);
-if (config.abacatePay) setAbacateConfig(config.abacatePay);
+if (config.asaas) setAsaasConfig(config.asaas);
 initPlans(config.plans, config.scenarioMix, config.minMarginPct, config.seedVersion);
 // Persist seed version after migration
 if (config.seedVersion !== getSeedVersion()) { config.seedVersion = getSeedVersion(); saveConfig(config); }
@@ -149,9 +149,9 @@ setTimeout(() => { try { backfillSnapshots(); } catch {} }, 2000);
 setInterval(() => {
   try {
     let changed = false;
-    const abacate = getAbacateConfig();
-    if (JSON.stringify(config.abacatePay) !== JSON.stringify(abacate)) {
-      config.abacatePay = abacate; changed = true;
+    const asaas = getAsaasConfig();
+    if (JSON.stringify(config.asaas) !== JSON.stringify(asaas)) {
+      config.asaas = asaas; changed = true;
     }
     const plans = getPlans();
     if (JSON.stringify(config.plans) !== JSON.stringify(plans)) {
