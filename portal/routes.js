@@ -16,10 +16,10 @@ import {
   addKey, updateKey, removeKey, findKeyById
 } from './abacate.js';
 import {
-  getPlans, setPlans, getPlansDict, getPlanOrder,
+  getPlans, getPlansDict, getPlanOrder,
   addPlan, updatePlan, removePlan, findPlan,
   calculateScenarios, getScenarioMix, setScenarioMix,
-  getMinMargin, setMinMargin, initPlans
+  getMinMargin, setMinMargin
 } from './plans-store.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -119,6 +119,7 @@ router.get('/me', requireAuth, (req, res) => {
     subscription: sub ? {
       plan_id: sub.plan_id,
       plan: PLANS[sub.plan_id],
+      plan_snapshot: sub.plan_snapshot,
       api_key: sub.api_key,
       expires_at: sub.expires_at,
       active: !!sub.active,

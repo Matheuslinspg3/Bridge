@@ -91,6 +91,18 @@ export async function initDB() {
   try { db.run(`ALTER TABLE orders ADD COLUMN abacate_charge_id TEXT`); } catch {}
   try { db.run(`ALTER TABLE orders ADD COLUMN abacate_key_id TEXT`); } catch {}
 
+  // plan_snapshot column on subscriptions
+  try { db.run(`ALTER TABLE subscriptions ADD COLUMN plan_snapshot TEXT`); } catch {}
+
+  // Backfill plan_snapshot for existing subscriptions (best-effort)
+  try {
+    const subs = db.prepare('SELECT id, plan_id FROM subscriptions WHERE plan_snapshot IS NULL');
+    const toFill = [];
+    while (subs.step()) toFill.push(subs.getAsObject());
+    subs.free();
+    // We'll backfill in the app layer after plans are loaded (deferred)
+  } catch {}
+
   // Save periodically
   setInterval(() => saveDB(), 30000);
 

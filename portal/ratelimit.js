@@ -145,6 +145,24 @@ function computeEffectiveQuota(apiKey, sub, plan) {
   return { weeklyQuota, dailyCap, baseBucket, rolloverPool, currentBonus };
 }
 
+// ── Get plan data from subscription snapshot (source of truth for quota) ──
+function getPlanFromSnapshot(sub) {
+  // 1. Try snapshot (contracted terms — preferred)
+  if (sub.plan_snapshot) {
+    try {
+      const snap = JSON.parse(sub.plan_snapshot);
+      if (snap && snap.tokensMonth && snap.rpm) {
+        return { ...snap, id: sub.plan_id };
+      }
+    } catch {}
+  }
+  // 2. Fallback: current plan definition (for old subscriptions without snapshot)
+  const current = PLANS[sub.plan_id];
+  if (current) return current;
+  // 3. No snapshot, no plan → return null (caller blocks)
+  return null;
+}
+
 // Check RPM
 function checkRPM(apiKey, limit) {
   const now = Date.now();

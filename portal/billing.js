@@ -149,12 +149,17 @@ export function confirmOrder(orderId) {
     return { apiKey: null, expiresAt: null, topup: true, tokens: TOP_UP.tokens };
   }
 
-  // Criar subscription (30 dias)
+  // Criar subscription (30 dias) with plan snapshot
   const apiKey = genPortalApiKey();
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const plan = PLANS[order.plan_id];
+  const snapshot = plan ? JSON.stringify({
+    tokensMonth: plan.tokensMonth, rpm: plan.rpm,
+    maxTokensReq: plan.maxTokensReq, price: plan.price, name: plan.name,
+  }) : null;
   run(
-    `INSERT INTO subscriptions (user_id, plan_id, api_key, starts_at, expires_at, active) VALUES (?, ?, ?, datetime('now'), ?, 1)`,
-    [order.user_id, order.plan_id, apiKey, expiresAt]
+    `INSERT INTO subscriptions (user_id, plan_id, api_key, starts_at, expires_at, active, plan_snapshot) VALUES (?, ?, ?, datetime('now'), ?, 1, ?)`,
+    [order.user_id, order.plan_id, apiKey, expiresAt, snapshot]
   );
   saveDB();
 
@@ -212,4 +217,24 @@ export function getTopupsThisMonth(userId) {
     [userId, monthStart]
   );
   return row?.total || 0;
+}
+
+// ── Backfill plan_snapshot for existing subscriptions ──
+export function backfillSnapshots() {
+  try {
+    const subs = queryAll(`SELECT id, plan_id FROM subscriptions WHERE plan_snapshot IS NULL AND active = 1`);
+    for (const sub of subs) {
+      const plan = PLANS[sub.plan_id];
+      if (plan) {
+        const snapshot = JSON.stringify({
+          tokensMonth: plan.tokensMonth, rpm: plan.rpm,
+          maxTokensReq: plan.maxTokensReq, price: plan.price, name: plan.name,
+        });
+        run(`UPDATE subscriptions SET plan_snapshot = ? WHERE id = ?`, [snapshot, sub.id]);
+      }
+    }
+    saveDB();
+  } catch (e) {
+    console.error('[billing] backfillSnapshots error:', e.message);
+  }
 }
