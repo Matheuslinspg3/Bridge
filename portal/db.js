@@ -93,6 +93,8 @@ export async function initDB() {
   // Asaas columns on orders
   try { db.run(`ALTER TABLE orders ADD COLUMN asaas_payment_id TEXT`); } catch {}
   try { db.run(`ALTER TABLE orders ADD COLUMN asaas_key_id TEXT`); } catch {}
+  // CPF column on users
+  try { db.run(`ALTER TABLE users ADD COLUMN cpf TEXT`); } catch {}
 
   // plan_snapshot column on subscriptions
   try { db.run(`ALTER TABLE subscriptions ADD COLUMN plan_snapshot TEXT`); } catch {}

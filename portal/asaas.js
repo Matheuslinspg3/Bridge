@@ -98,20 +98,32 @@ function asaasFetch(key, path, options = {}) {
  * Returns customerId string.
  */
 export async function ensureCustomer(key, user) {
+  const cpf = (user.cpf || '').replace(/\D/g, '');
+
   // Try to find existing customer by email
   const searchRes = await asaasFetch(key, `/customers?email=${encodeURIComponent(user.email)}`);
   if (searchRes.ok) {
     const data = await searchRes.json();
     if (data.data && data.data.length > 0) {
-      return data.data[0].id;
+      const existing = data.data[0];
+      // Update cpfCnpj if missing on existing customer
+      if (cpf && !existing.cpfCnpj) {
+        await asaasFetch(key, `/customers/${existing.id}`, {
+          method: 'POST',
+          body: JSON.stringify({ cpfCnpj: cpf }),
+        });
+      }
+      return existing.id;
     }
   }
-  // Create new customer
+
+  // Create new customer with cpfCnpj
   const createRes = await asaasFetch(key, '/customers', {
     method: 'POST',
     body: JSON.stringify({
       name: user.name || user.email.split('@')[0],
       email: user.email,
+      cpfCnpj: cpf || undefined,
     }),
   });
   if (!createRes.ok) {

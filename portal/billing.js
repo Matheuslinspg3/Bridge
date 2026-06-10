@@ -82,6 +82,9 @@ export async function createOrder(userId, planId) {
     if (key) {
       try {
         const user = queryOne('SELECT * FROM users WHERE id = ?', [userId]);
+        if (!user.cpf) {
+          throw { needCpf: true, message: 'CPF obrigatório para pagamento Asaas' };
+        }
         const customerId = await ensureCustomer(key, user);
 
         // Create a temporary order ID for externalReference
@@ -103,6 +106,10 @@ export async function createOrder(userId, planId) {
 
         return { order, qrDataUrl: payment.qrDataUrl, payload: payment.brCode };
       } catch (err) {
+        if (err.needCpf) {
+          // Don't fallback — user needs to provide CPF first
+          throw new Error('CPF obrigatório para pagamento. Complete seu perfil com o CPF.');
+        }
         console.error('[asaas] Payment creation failed, falling back to static PIX:', err.message);
         // Delete the dangling order if it was created
         try { const lastId = queryOne("SELECT id FROM orders WHERE user_id = ? AND pix_payload = '' AND status = 'pending' ORDER BY id DESC LIMIT 1", [userId]); if (lastId) run('DELETE FROM orders WHERE id = ?', [lastId.id]); } catch {}
