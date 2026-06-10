@@ -924,12 +924,6 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 /* ---- Profit/Loss Tab ---- */
 async function loadProfit() {
   const token = getToken();
-  const pInput = parseFloat(document.getElementById('rcInput')?.value || 1.5);
-  const pOutput = parseFloat(document.getElementById('rcOutput')?.value || 7.5);
-  const pCW = parseFloat(document.getElementById('rcCacheWrite')?.value || 1.875);
-  const pCR = parseFloat(document.getElementById('rcCacheRead')?.value || 0.15);
-  const fx = parseFloat(document.getElementById('rcFx')?.value || 0.76);
-
   try {
     const res = await fetch("/portal/admin/profit", {
       headers: { "x-dashboard-token": token }
@@ -937,25 +931,32 @@ async function loadProfit() {
     if (!res.ok) { document.getElementById('profitTable').innerHTML = '<tr><td colspan="10">Erro ao carregar</td></tr>'; return; }
     const data = await res.json();
 
-    let totalRevenue = 0, totalCost = 0, redCount = 0;
+    // Populate cost config inputs from backend
+    if (data.cost_config) {
+      const cc = data.cost_config;
+      if (document.getElementById('rcInput')) document.getElementById('rcInput').value = cc.inputPriceYuanPerM;
+      if (document.getElementById('rcOutput')) document.getElementById('rcOutput').value = cc.outputPriceYuanPerM;
+      if (document.getElementById('rcCacheWrite')) document.getElementById('rcCacheWrite').value = cc.cacheWritePriceYuanPerM;
+      if (document.getElementById('rcCacheRead')) document.getElementById('rcCacheRead').value = cc.cacheReadPriceYuanPerM;
+      if (document.getElementById('rcFx')) document.getElementById('rcFx').value = cc.fxCnyToBrl;
+    }
+
+    // Render table from pre-calculated backend values
     const rows = data.accounts.map(a => {
-      const cost = ((a.tokens_input * pInput) + (a.tokens_output * pOutput) + (a.tokens_cache_write * pCW) + (a.tokens_cache_read * pCR)) / 1e6 * fx;
-      const revenue = a.revenue;
-      const margin = revenue - cost;
-      const marginPct = revenue > 0 ? ((margin / revenue) * 100).toFixed(1) : '-';
-      totalRevenue += revenue;
-      totalCost += cost;
-      if (margin < 0) redCount++;
-      const cls = margin < 0 ? 'style="background:rgba(239,68,68,0.1)"' : '';
-      return `<tr ${cls}><td>${escHtml(a.email)}</td><td>${a.plan_id||'-'}</td><td>${revenue.toFixed(2)}</td><td>${fmt(a.tokens_input)}</td><td>${fmt(a.tokens_output)}</td><td>${fmt(a.tokens_cache_write)}</td><td>${fmt(a.tokens_cache_read)}</td><td>${cost.toFixed(2)}</td><td>${margin.toFixed(2)}</td><td>${marginPct}%</td></tr>`;
+      const marginPct = a.margin_pct !== null ? a.margin_pct.toFixed(1) : '-';
+      const cls = a.in_red ? 'style="background:rgba(239,68,68,0.1)"' : '';
+      return `<tr ${cls}><td>${escHtml(a.email)}</td><td>${a.plan_id||'-'}</td><td>${a.revenue.toFixed(2)}</td><td>${fmt(a.tokens_input)}</td><td>${fmt(a.tokens_output)}</td><td>${fmt(a.tokens_cache_write)}</td><td>${fmt(a.tokens_cache_read)}</td><td>${a.cost_brl.toFixed(2)}</td><td>${a.margin_brl.toFixed(2)}</td><td>${marginPct}%</td></tr>`;
     }).join('');
 
     document.getElementById('profitTable').innerHTML = rows || '<tr><td colspan="10">Nenhuma conta</td></tr>';
-    document.getElementById('profitRevenue').textContent = 'R$ ' + totalRevenue.toFixed(2);
-    document.getElementById('profitCost').textContent = 'R$ ' + totalCost.toFixed(2);
-    document.getElementById('profitNet').textContent = 'R$ ' + (totalRevenue - totalCost).toFixed(2);
-    document.getElementById('profitNet').style.color = (totalRevenue - totalCost) >= 0 ? '#22c55e' : '#ef4444';
-    document.getElementById('profitRedAccounts').textContent = redCount;
+
+    // Totals from backend
+    const t = data.totals;
+    document.getElementById('profitRevenue').textContent = 'R$ ' + t.total_revenue_brl.toFixed(2);
+    document.getElementById('profitCost').textContent = 'R$ ' + t.total_cost_brl.toFixed(2);
+    document.getElementById('profitNet').textContent = 'R$ ' + t.net_profit_brl.toFixed(2);
+    document.getElementById('profitNet').style.color = t.net_profit_brl >= 0 ? '#22c55e' : '#ef4444';
+    document.getElementById('profitRedAccounts').textContent = t.accounts_in_red;
   } catch (e) { console.error(e); }
 }
 
@@ -1004,3 +1005,23 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
   const orig = btn._profitListener;
   btn.addEventListener('click', () => { if (btn.dataset.tab === 'tabProfit') loadQuotaConfig(); });
 });
+
+
+/* ---- Cost Config ---- */
+async function saveCostConfig() {
+  const token = getToken();
+  const cfg = {
+    inputPriceYuanPerM: Number(document.getElementById('rcInput').value) || 1.5,
+    outputPriceYuanPerM: Number(document.getElementById('rcOutput').value) || 7.5,
+    cacheWritePriceYuanPerM: Number(document.getElementById('rcCacheWrite').value) || 1.875,
+    cacheReadPriceYuanPerM: Number(document.getElementById('rcCacheRead').value) || 0.15,
+    fxCnyToBrl: Number(document.getElementById('rcFx').value) || 0.76,
+  };
+  try {
+    await fetch("/portal/admin/cost-config", {
+      method: "PUT", headers: { "x-dashboard-token": token, "Content-Type": "application/json" },
+      body: JSON.stringify(cfg)
+    });
+    loadProfit(); // Reload with new config
+  } catch (e) { console.error(e); }
+}

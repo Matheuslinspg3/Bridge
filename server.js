@@ -7,7 +7,7 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import cookieParser from "cookie-parser";
-import portalRouter from './portal/routes.js';
+import portalRouter, { setCostConfig, getCostConfig } from './portal/routes.js';
 import { checkPlanLimits, recordPortalUsage, setQuotaConfig, getQuotaConfig } from './portal/ratelimit.js';
 import { initDB } from './portal/db.js';
 
@@ -133,6 +133,7 @@ let config = loadConfig();
 
 // Load quotaConfig from config.json if present
 if (config.quotaConfig) setQuotaConfig(config.quotaConfig);
+if (config.costConfig) setCostConfig(config.costConfig);
 
 // Env var DASHBOARD_PASSWORD é fonte de verdade: se definida, sobrepõe o
 // valor persistido em config.json (unifica painel /dev, proxy e portal).
