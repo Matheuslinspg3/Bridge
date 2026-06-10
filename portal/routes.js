@@ -228,9 +228,34 @@ router.put('/admin/quota-config', requireAdmin, (req, res) => {
   res.json({ ok: true, config: getQuotaConfig() });
 });
 
-// GET /portal/admin/profit — aggregate usage & revenue per account
+// ── Cost config (RC prices + FX) ──
+const DEFAULT_COST_CONFIG = {
+  inputPriceYuanPerM: 1.50,
+  outputPriceYuanPerM: 7.50,
+  cacheWritePriceYuanPerM: 1.875,
+  cacheReadPriceYuanPerM: 0.15,
+  fxCnyToBrl: 0.76,
+};
+let costConfig = { ...DEFAULT_COST_CONFIG };
+
+export function setCostConfig(cfg) { if (cfg) costConfig = { ...costConfig, ...cfg }; }
+export function getCostConfig() { return { ...costConfig }; }
+
+// GET /portal/admin/cost-config
+router.get('/admin/cost-config', requireAdmin, (req, res) => {
+  res.json(getCostConfig());
+});
+
+// PUT /portal/admin/cost-config
+router.put('/admin/cost-config', requireAdmin, (req, res) => {
+  const cfg = req.body || {};
+  setCostConfig(cfg);
+  res.json({ ok: true, config: getCostConfig() });
+});
+
+// GET /portal/admin/profit — full P&L with backend calculation
 router.get('/admin/profit', requireAdmin, (req, res) => {
-  const accounts = queryAll(`
+  const rows = queryAll(`
     SELECT u.id, u.email,
       s.plan_id,
       COALESCE(rev.total_revenue, 0) as revenue,
@@ -255,7 +280,46 @@ router.get('/admin/profit', requireAdmin, (req, res) => {
     ) usg ON usg.api_key = s.api_key
     ORDER BY revenue DESC
   `);
-  res.json({ accounts });
+
+  const { inputPriceYuanPerM, outputPriceYuanPerM, cacheWritePriceYuanPerM, cacheReadPriceYuanPerM, fxCnyToBrl } = costConfig;
+
+  let totalRevenue = 0, totalCost = 0, accountsInRed = 0;
+
+  const accounts = rows.map(a => {
+    const costBrl = (
+      (a.tokens_input * inputPriceYuanPerM) +
+      (a.tokens_output * outputPriceYuanPerM) +
+      (a.tokens_cache_write * cacheWritePriceYuanPerM) +
+      (a.tokens_cache_read * cacheReadPriceYuanPerM)
+    ) / 1_000_000 * fxCnyToBrl;
+
+    const marginBrl = a.revenue - costBrl;
+    const marginPct = a.revenue > 0 ? Math.round((marginBrl / a.revenue) * 10000) / 100 : null;
+    const inRed = marginBrl < 0;
+
+    totalRevenue += a.revenue;
+    totalCost += costBrl;
+    if (inRed) accountsInRed++;
+
+    return {
+      ...a,
+      cost_brl: Math.round(costBrl * 100) / 100,
+      margin_brl: Math.round(marginBrl * 100) / 100,
+      margin_pct: marginPct,
+      in_red: inRed,
+    };
+  });
+
+  res.json({
+    accounts,
+    totals: {
+      total_revenue_brl: Math.round(totalRevenue * 100) / 100,
+      total_cost_brl: Math.round(totalCost * 100) / 100,
+      net_profit_brl: Math.round((totalRevenue - totalCost) * 100) / 100,
+      accounts_in_red: accountsInRed,
+    },
+    cost_config: costConfig,
+  });
 });
 
 // ── Expiration check (run periodically) ──
