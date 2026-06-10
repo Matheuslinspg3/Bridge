@@ -148,6 +148,38 @@ claude</pre>
         </div>
       </div>
 
+      <!-- CPF Modal -->
+      <div id="cpfModal" class="card hidden fade-in" style="border:2px solid var(--accent)">
+        <h3>📋 CPF necessário para pagamento</h3>
+        <p style="color:var(--text2);font-size:0.875rem;margin-bottom:1rem">Informe seu CPF para gerar o PIX. Ele será salvo no seu perfil.</p>
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap">
+          <input id="cpfInput" type="text" placeholder="000.000.000-00" maxlength="14" style="padding:0.6rem 1rem;border:1px solid var(--border);border-radius:var(--radius-xs);background:var(--bg2);color:var(--text1);font-size:1rem;width:180px;font-family:var(--font-mono)">
+          <button class="btn btn-sm" id="cpfSaveBtn" onclick="saveCpfAndRetry()">Salvar e continuar</button>
+        </div>
+        <p id="cpfError" style="color:#ef4444;font-size:0.825rem;margin-top:0.5rem;display:none"></p>
+      </div>
+
+      <!-- Profile section -->
+      <div id="profileSection" class="card">
+        <h3>Meus dados</h3>
+        <div style="margin-top:1rem;display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center">
+          <div><span style="color:var(--text3);font-size:0.825rem">Email</span><br><span id="profileEmail" style="font-weight:500"></span></div>
+          <div>
+            <span style="color:var(--text3);font-size:0.825rem">CPF</span><br>
+            <span id="profileCpf" style="font-weight:500;font-family:var(--font-mono)">—</span>
+            <button class="btn btn-sm" id="editCpfBtn" onclick="showCpfEdit()" style="margin-left:0.5rem;font-size:0.75rem;padding:0.2rem 0.5rem">Editar</button>
+          </div>
+        </div>
+        <div id="profileCpfEdit" style="display:none;margin-top:0.75rem">
+          <div style="display:flex;gap:0.5rem;align-items:center">
+            <input id="profileCpfInput" type="text" placeholder="000.000.000-00" maxlength="14" style="padding:0.5rem 0.8rem;border:1px solid var(--border);border-radius:var(--radius-xs);background:var(--bg2);color:var(--text1);font-family:var(--font-mono);width:160px">
+            <button class="btn btn-sm" onclick="saveProfileCpf()">Salvar</button>
+            <button class="btn btn-sm" onclick="hideProfileCpfEdit()" style="background:var(--bg3)">Cancelar</button>
+          </div>
+          <p id="profileCpfError" style="color:#ef4444;font-size:0.825rem;margin-top:0.4rem;display:none"></p>
+        </div>
+      </div>
+
       <!-- Orders -->
       <div id="ordersSection" class="card">
         <h3>Meus Pedidos</h3>
@@ -213,6 +245,12 @@ claude</pre>
         document.getElementById('topupSection').classList.remove('hidden');
       }
 
+      // Profile section
+      document.getElementById('profileEmail').textContent = data.email;
+      updateProfileCpf(data.cpf || null);
+      // Add mask listener for profile input too
+      document.getElementById('profileCpfInput').addEventListener('input', function() { maskCpfInput(this); });
+
       const ordersRes = await apiFetch('/portal/orders');
       if (ordersRes.ok) {
         const orders = await ordersRes.json();
@@ -229,17 +267,104 @@ claude</pre>
       }
     }
 
+    let pendingPlanId = null; // stores plan to retry after CPF saved
+
     async function orderPlan(planId) {
       const res = await apiFetch('/portal/orders', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ plan_id: planId })
       });
       const data = await res.json();
-      if (!res.ok) { alert(data.error); return; }
+      if (!res.ok) {
+        if (data.needCpf) {
+          // Show CPF modal and store plan for retry
+          pendingPlanId = planId;
+          document.getElementById('cpfModal').classList.remove('hidden');
+          document.getElementById('cpfInput').focus();
+          document.getElementById('cpfModal').scrollIntoView({ behavior: 'smooth' });
+          return;
+        }
+        alert(data.error); return;
+      }
       document.getElementById('pixQR').src = data.qr_code;
       document.getElementById('pixPayload').textContent = data.pix_payload;
       document.getElementById('pixModal').classList.remove('hidden');
       document.getElementById('pixModal').scrollIntoView({ behavior: 'smooth' });
+    }
+
+    // CPF mask
+    function maskCpfInput(el) {
+      let v = el.value.replace(/\D/g, '').slice(0, 11);
+      if (v.length > 9) v = v.slice(0,3)+'.'+v.slice(3,6)+'.'+v.slice(6,9)+'-'+v.slice(9);
+      else if (v.length > 6) v = v.slice(0,3)+'.'+v.slice(3,6)+'.'+v.slice(6);
+      else if (v.length > 3) v = v.slice(0,3)+'.'+v.slice(3);
+      el.value = v;
+    }
+    document.getElementById('cpfInput').addEventListener('input', function() { maskCpfInput(this); });
+
+    async function saveCpfAndRetry() {
+      const cpf = document.getElementById('cpfInput').value;
+      const errEl = document.getElementById('cpfError');
+      errEl.style.display = 'none';
+      const btn = document.getElementById('cpfSaveBtn');
+      btn.disabled = true; btn.textContent = 'Salvando...';
+
+      const res = await apiFetch('/portal/me', {
+        method: 'PUT', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ cpf })
+      });
+      const data = await res.json();
+      btn.disabled = false; btn.textContent = 'Salvar e continuar';
+
+      if (!res.ok) {
+        errEl.textContent = data.error || 'CPF inválido';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      // Success — hide modal and retry order
+      document.getElementById('cpfModal').classList.add('hidden');
+      updateProfileCpf(data.cpf);
+      if (pendingPlanId) {
+        const retryPlan = pendingPlanId;
+        pendingPlanId = null;
+        await orderPlan(retryPlan);
+      }
+    }
+
+    // Profile CPF display
+    function maskCpfDisplay(cpf) {
+      if (!cpf || cpf.length !== 11) return cpf || '—';
+      return '***.' + cpf.slice(3,6) + '.' + cpf.slice(6,9) + '-' + cpf.slice(9);
+    }
+    function updateProfileCpf(cpf) {
+      document.getElementById('profileCpf').textContent = cpf ? maskCpfDisplay(cpf) : '— não informado';
+      document.getElementById('editCpfBtn').textContent = cpf ? 'Editar' : 'Adicionar';
+    }
+    function showCpfEdit() {
+      document.getElementById('profileCpfEdit').style.display = 'block';
+      document.getElementById('profileCpfInput').focus();
+    }
+    function hideProfileCpfEdit() {
+      document.getElementById('profileCpfEdit').style.display = 'none';
+      document.getElementById('profileCpfError').style.display = 'none';
+    }
+    async function saveProfileCpf() {
+      const cpf = document.getElementById('profileCpfInput').value;
+      const errEl = document.getElementById('profileCpfError');
+      errEl.style.display = 'none';
+      const res = await apiFetch('/portal/me', {
+        method: 'PUT', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ cpf })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        errEl.textContent = data.error || 'CPF inválido';
+        errEl.style.display = 'block';
+        return;
+      }
+      updateProfileCpf(data.cpf);
+      hideProfileCpfEdit();
     }
 
     function copyKey() {

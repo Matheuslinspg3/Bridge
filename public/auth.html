@@ -133,6 +133,10 @@ body {
       <label>Senha</label>
       <input type="password" id="regPassword" placeholder="Mínimo 6 caracteres" required minlength="6">
     </div>
+    <div class="field">
+      <label>CPF <span style="font-weight:normal;color:var(--text3)">(para pagamento PIX)</span></label>
+      <input type="text" id="regCpf" placeholder="000.000.000-00" maxlength="14" oninput="let v=this.value.replace(/\D/g,'').slice(0,11);if(v.length>9)v=v.slice(0,3)+'.'+v.slice(3,6)+'.'+v.slice(6,9)+'-'+v.slice(9);else if(v.length>6)v=v.slice(0,3)+'.'+v.slice(3,6)+'.'+v.slice(6);else if(v.length>3)v=v.slice(0,3)+'.'+v.slice(3);this.value=v;">
+    </div>
     <button type="submit" class="btn">Criar conta →</button>
   </form>
 
@@ -180,11 +184,12 @@ $('#registerForm').addEventListener('submit', async (e) => {
   const name = $('#regName').value;
   const email = $('#regEmail').value;
   const password = $('#regPassword').value;
+  const cpf = $('#regCpf').value || undefined;
   try {
     const res = await fetch('/portal/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, name })
+      body: JSON.stringify({ email, password, name, cpf })
     });
     const data = await res.json();
     if (!res.ok) { msg(data.error || 'Erro', 'error'); return; }
