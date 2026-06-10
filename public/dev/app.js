@@ -130,6 +130,8 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     $("#tabKeys").classList.toggle("hidden", tab !== "tabKeys");
     $("#tabUsage").classList.toggle("hidden", tab !== "tabUsage");
     $("#tabSettings").classList.toggle("hidden", tab !== "tabSettings");
+    $("#tabPayments").classList.toggle("hidden", tab !== "tabPayments");
+    $("#tabProfit").classList.toggle("hidden", tab !== "tabProfit");
     if (tab === "tabSettings") refreshSettings();
     if (tab === "tabKeys") refreshKeys();
     if (tab === "tabUsage") refreshUsage();
