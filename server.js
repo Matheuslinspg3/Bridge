@@ -9,8 +9,9 @@ import { fileURLToPath } from "url";
 import cookieParser from "cookie-parser";
 import portalRouter, { setCostConfig, getCostConfig } from './portal/routes.js';
 import { setAbacateConfig, getAbacateConfig } from './portal/abacate.js';
-import { initPlans, getPlans, getScenarioMix, getMinMargin } from './portal/plans-store.js';
+import { initPlans, getPlans, getScenarioMix, getMinMargin, getSeedVersion } from './portal/plans-store.js';
 import { checkPlanLimits, recordPortalUsage, setQuotaConfig, getQuotaConfig } from './portal/ratelimit.js';
+import { backfillSnapshots } from './portal/billing.js';
 import { initDB } from './portal/db.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -137,7 +138,12 @@ let config = loadConfig();
 if (config.quotaConfig) setQuotaConfig(config.quotaConfig);
 if (config.costConfig) setCostConfig(config.costConfig);
 if (config.abacatePay) setAbacateConfig(config.abacatePay);
-initPlans(config.plans, config.scenarioMix, config.minMarginPct);
+initPlans(config.plans, config.scenarioMix, config.minMarginPct, config.seedVersion);
+// Persist seed version after migration
+if (config.seedVersion !== getSeedVersion()) { config.seedVersion = getSeedVersion(); saveConfig(config); }
+
+// Backfill plan_snapshot for existing subscriptions without one
+setTimeout(() => { try { backfillSnapshots(); } catch {} }, 2000);
 
 // Persist config changes periodically (abacatePay + plans + scenarios)
 setInterval(() => {
@@ -167,6 +173,10 @@ setInterval(() => {
 // valor persistido em config.json (unifica painel /dev, proxy e portal).
 if (process.env.DASHBOARD_PASSWORD && process.env.DASHBOARD_PASSWORD.trim()) {
   config.dashboardPassword = process.env.DASHBOARD_PASSWORD.trim();
+}
+// Expose dashboardPassword to portal routes (they read from env)
+if (config.dashboardPassword) {
+  process.env.DASHBOARD_PASSWORD = config.dashboardPassword;
 }
 
 const isConfigured = () =>

@@ -8,9 +8,12 @@
 // ── Seed plans (created on first run if no config) ──
 const SEED_PLANS = [
   { id: 'pro5x', name: 'Pro 5x', price: 99.90, tokensMonth: 60_000_000, rpm: 15, maxTokensReq: 4096, enabled: true },
-  { id: 'max10x', name: 'Max 10x', price: 179.90, tokensMonth: 130_000_000, rpm: 25, maxTokensReq: 8192, enabled: true },
-  { id: 'max20x', name: 'Max 20x', price: 279.90, tokensMonth: 220_000_000, rpm: 40, maxTokensReq: 16384, enabled: true },
+  { id: 'max10x', name: 'Max 10x', price: 184.90, tokensMonth: 120_000_000, rpm: 25, maxTokensReq: 8192, enabled: true },
+  { id: 'max20x', name: 'Max 20x', price: 299.90, tokensMonth: 190_000_000, rpm: 40, maxTokensReq: 16384, enabled: true },
 ];
+
+// Seed version — bump this when seed values change to trigger migration
+const SEED_VERSION = 2;
 
 // ── In-memory state ──
 let plans = [];
@@ -30,15 +33,32 @@ export function getMinMargin() { return minMarginPct; }
 export function setMinMargin(v) { if (typeof v === 'number') minMarginPct = v; }
 
 // Initialize with seed if empty
-export function initPlans(configPlans, configScenarios, configMinMargin) {
+export function initPlans(configPlans, configScenarios, configMinMargin, seedVersion) {
   if (configPlans && configPlans.length > 0) {
     plans = configPlans;
+    // Migrate seed plans if version changed (only updates the 3 original seed IDs)
+    if ((seedVersion || 0) < SEED_VERSION) {
+      for (const seed of SEED_PLANS) {
+        const existing = plans.find(p => p.id === seed.id);
+        if (existing) {
+          // Only update if values still match a known previous seed (not manually edited)
+          // We update price + tokensMonth unconditionally for seed IDs
+          existing.price = seed.price;
+          existing.tokensMonth = seed.tokensMonth;
+          existing.name = seed.name;
+          existing.rpm = seed.rpm;
+          existing.maxTokensReq = seed.maxTokensReq;
+        }
+      }
+    }
   } else {
     plans = [...SEED_PLANS];
   }
   if (configScenarios) scenarioMix = { ...scenarioMix, ...configScenarios };
   if (typeof configMinMargin === 'number') minMarginPct = configMinMargin;
 }
+
+export function getSeedVersion() { return SEED_VERSION; }
 
 // ── PLANS object (compatibility layer for billing.js / ratelimit.js) ──
 // Returns { [id]: plan } dict with derived fields
