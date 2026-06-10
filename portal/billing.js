@@ -1,6 +1,7 @@
 import { queryAll, queryOne, run, saveDB } from './db.js';
 import { generatePixQRCode } from './pix.js';
 import { notifyNewOrder } from './notify.js';
+import { getAbacateConfig, getNextKey, createAbacateCharge } from './abacate.js';
 
 // ── Planos ──
 export const PLANS = {
@@ -95,6 +96,39 @@ export async function createOrder(userId, planId) {
 
   const amount = plan.price + randomCents();
 
+  // Try AbacatePay if enabled, else fallback to static PIX
+  const abConfig = getAbacateConfig();
+  if (abConfig.enabled) {
+    const key = getNextKey();
+    if (key) {
+      try {
+        // Insert order first to get ID for externalId
+        const result = run(
+          `INSERT INTO orders (user_id, plan_id, amount_brl, pix_payload, status) VALUES (?, ?, ?, ?, 'pending')`,
+          [userId, planId, amount, '']
+        );
+        const orderId = result.lastInsertRowid;
+
+        const charge = await createAbacateCharge(key, amount, orderId);
+
+        // Update order with AbacatePay data
+        run(`UPDATE orders SET pix_payload = ?, abacate_charge_id = ?, abacate_key_id = ? WHERE id = ?`,
+          [charge.brCode, charge.chargeId, key.id, orderId]);
+        saveDB();
+
+        const order = queryOne('SELECT * FROM orders WHERE id = ?', [orderId]);
+        const user = queryOne('SELECT * FROM users WHERE id = ?', [userId]);
+        notifyNewOrder(order, user).catch(() => {});
+
+        return { order, qrDataUrl: charge.brCodeBase64, payload: charge.brCode };
+      } catch (err) {
+        console.error('[abacatepay] Charge creation failed, falling back to static PIX:', err.message);
+        // Fall through to static PIX
+      }
+    }
+  }
+
+  // Fallback: static PIX
   const { payload, qrDataUrl } = await generatePixQRCode(amount);
 
   const result = run(

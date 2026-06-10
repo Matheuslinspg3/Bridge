@@ -11,6 +11,10 @@ import {
   expireSubscriptions
 } from './billing.js';
 import { getDailyUsage, getMonthlyUsage, getQuotaConfig, setQuotaConfig, computeEffectiveQuota } from './ratelimit.js';
+import {
+  getAbacateConfig, setAbacateConfig, getKeysMasked,
+  addKey, updateKey, removeKey, findKeyById
+} from './abacate.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -320,6 +324,101 @@ router.get('/admin/profit', requireAdmin, (req, res) => {
     },
     cost_config: costConfig,
   });
+});
+
+// ── AbacatePay admin: key management ──
+
+// GET /portal/admin/abacate-keys
+router.get('/admin/abacate-keys', requireAdmin, (req, res) => {
+  const cfg = getAbacateConfig();
+  res.json({
+    enabled: cfg.enabled,
+    keys: getKeysMasked(),
+    rotationIndex: cfg.rotationIndex,
+  });
+});
+
+// POST /portal/admin/abacate-keys — add key
+router.post('/admin/abacate-keys', requireAdmin, (req, res) => {
+  const { label, apiKey, webhookSecret, enabled } = req.body || {};
+  if (!label || !apiKey || !webhookSecret) {
+    return res.status(400).json({ error: 'label, apiKey e webhookSecret são obrigatórios' });
+  }
+  const id = addKey(label, apiKey, webhookSecret, enabled !== false);
+  res.json({ ok: true, id });
+});
+
+// PUT /portal/admin/abacate-keys/:id — update key
+router.put('/admin/abacate-keys/:id', requireAdmin, (req, res) => {
+  const ok = updateKey(req.params.id, req.body || {});
+  if (!ok) return res.status(404).json({ error: 'Chave não encontrada' });
+  res.json({ ok: true });
+});
+
+// DELETE /portal/admin/abacate-keys/:id — remove key
+router.delete('/admin/abacate-keys/:id', requireAdmin, (req, res) => {
+  const ok = removeKey(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'Chave não encontrada' });
+  res.json({ ok: true });
+});
+
+// PUT /portal/admin/abacate-toggle — enable/disable global
+router.put('/admin/abacate-toggle', requireAdmin, (req, res) => {
+  const { enabled } = req.body || {};
+  setAbacateConfig({ enabled: !!enabled });
+  res.json({ ok: true, enabled: getAbacateConfig().enabled });
+});
+
+// ── AbacatePay webhook (PUBLIC, validated by keyId + webhookSecret) ──
+// URL pattern: /portal/webhook/abacatepay/:keyId
+// Security: the webhook URL is unique per key. We validate that the keyId exists
+// and that the request contains the correct webhookSecret in the x-webhook-secret header.
+// Each AbacatePay account is configured to send webhooks to its own URL.
+router.post('/webhook/abacatepay/:keyId', async (req, res) => {
+  const { keyId } = req.params;
+  const key = findKeyById(keyId);
+  if (!key) return res.status(404).json({ error: 'Unknown key' });
+
+  // Validate webhook secret via header
+  const incomingSecret = req.headers['x-webhook-secret'] || req.query.secret || '';
+  if (!incomingSecret || incomingSecret !== key.webhookSecret) {
+    return res.status(403).json({ error: 'Invalid webhook secret' });
+  }
+
+  // Process the event
+  const { data } = req.body || {};
+  if (!data || !data.id) return res.status(200).json({ ok: true }); // Ignore malformed
+
+  const chargeId = data.id;
+  const status = data.status; // PENDING, PAID, EXPIRED, CANCELLED, UNDER_DISPUTE, REFUNDED
+
+  // Find the order by charge id
+  const order = queryOne('SELECT * FROM orders WHERE abacate_charge_id = ?', [chargeId]);
+  if (!order) return res.status(200).json({ ok: true, note: 'order not found' });
+
+  if (status === 'PAID') {
+    // Idempotency: don't confirm twice
+    if (order.status === 'confirmed') return res.status(200).json({ ok: true, note: 'already confirmed' });
+    try {
+      confirmOrder(order.id);
+    } catch (err) {
+      console.error('[webhook/abacatepay] confirmOrder error:', err.message);
+    }
+  } else if (['CANCELLED', 'EXPIRED'].includes(status)) {
+    if (order.status === 'pending') {
+      run(`UPDATE orders SET status = 'cancelled', rejected_at = datetime('now') WHERE id = ?`, [order.id]);
+      saveDB();
+    }
+  } else if (['UNDER_DISPUTE', 'REFUNDED'].includes(status)) {
+    // If already confirmed, deactivate subscription
+    if (order.status === 'confirmed') {
+      run(`UPDATE orders SET status = ? WHERE id = ?`, [status.toLowerCase(), order.id]);
+      run(`UPDATE subscriptions SET active = 0 WHERE user_id = ? AND plan_id = ?`, [order.user_id, order.plan_id]);
+      saveDB();
+    }
+  }
+
+  res.status(200).json({ ok: true });
 });
 
 // ── Expiration check (run periodically) ──
