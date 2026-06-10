@@ -87,6 +87,10 @@ export async function initDB() {
   try { db.run(`ALTER TABLE usage_log ADD COLUMN tokens_cache_write INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.run(`ALTER TABLE usage_log ADD COLUMN tokens_cache_read INTEGER NOT NULL DEFAULT 0`); } catch {}
 
+  // AbacatePay columns on orders
+  try { db.run(`ALTER TABLE orders ADD COLUMN abacate_charge_id TEXT`); } catch {}
+  try { db.run(`ALTER TABLE orders ADD COLUMN abacate_key_id TEXT`); } catch {}
+
   // Save periodically
   setInterval(() => saveDB(), 30000);
 

@@ -8,6 +8,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import cookieParser from "cookie-parser";
 import portalRouter, { setCostConfig, getCostConfig } from './portal/routes.js';
+import { setAbacateConfig, getAbacateConfig } from './portal/abacate.js';
 import { checkPlanLimits, recordPortalUsage, setQuotaConfig, getQuotaConfig } from './portal/ratelimit.js';
 import { initDB } from './portal/db.js';
 
@@ -134,6 +135,18 @@ let config = loadConfig();
 // Load quotaConfig from config.json if present
 if (config.quotaConfig) setQuotaConfig(config.quotaConfig);
 if (config.costConfig) setCostConfig(config.costConfig);
+if (config.abacatePay) setAbacateConfig(config.abacatePay);
+
+// Persist abacatePay config changes periodically
+setInterval(() => {
+  try {
+    const current = getAbacateConfig();
+    if (JSON.stringify(config.abacatePay) !== JSON.stringify(current)) {
+      config.abacatePay = current;
+      saveConfig(config);
+    }
+  } catch {}
+}, 5000);
 
 // Env var DASHBOARD_PASSWORD é fonte de verdade: se definida, sobrepõe o
 // valor persistido em config.json (unifica painel /dev, proxy e portal).
