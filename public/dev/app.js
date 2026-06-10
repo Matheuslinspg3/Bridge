@@ -920,3 +920,87 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     if (btn.dataset.tab === 'tabPayments') loadPayments();
   });
 });
+
+/* ---- Profit/Loss Tab ---- */
+async function loadProfit() {
+  const token = getToken();
+  const pInput = parseFloat(document.getElementById('rcInput')?.value || 1.5);
+  const pOutput = parseFloat(document.getElementById('rcOutput')?.value || 7.5);
+  const pCW = parseFloat(document.getElementById('rcCacheWrite')?.value || 1.875);
+  const pCR = parseFloat(document.getElementById('rcCacheRead')?.value || 0.15);
+  const fx = parseFloat(document.getElementById('rcFx')?.value || 0.76);
+
+  try {
+    const res = await fetch("/portal/admin/profit", {
+      headers: { "x-dashboard-token": token }
+    });
+    if (!res.ok) { document.getElementById('profitTable').innerHTML = '<tr><td colspan="10">Erro ao carregar</td></tr>'; return; }
+    const data = await res.json();
+
+    let totalRevenue = 0, totalCost = 0, redCount = 0;
+    const rows = data.accounts.map(a => {
+      const cost = ((a.tokens_input * pInput) + (a.tokens_output * pOutput) + (a.tokens_cache_write * pCW) + (a.tokens_cache_read * pCR)) / 1e6 * fx;
+      const revenue = a.revenue;
+      const margin = revenue - cost;
+      const marginPct = revenue > 0 ? ((margin / revenue) * 100).toFixed(1) : '-';
+      totalRevenue += revenue;
+      totalCost += cost;
+      if (margin < 0) redCount++;
+      const cls = margin < 0 ? 'style="background:rgba(239,68,68,0.1)"' : '';
+      return `<tr ${cls}><td>${escHtml(a.email)}</td><td>${a.plan_id||'-'}</td><td>${revenue.toFixed(2)}</td><td>${fmt(a.tokens_input)}</td><td>${fmt(a.tokens_output)}</td><td>${fmt(a.tokens_cache_write)}</td><td>${fmt(a.tokens_cache_read)}</td><td>${cost.toFixed(2)}</td><td>${margin.toFixed(2)}</td><td>${marginPct}%</td></tr>`;
+    }).join('');
+
+    document.getElementById('profitTable').innerHTML = rows || '<tr><td colspan="10">Nenhuma conta</td></tr>';
+    document.getElementById('profitRevenue').textContent = 'R$ ' + totalRevenue.toFixed(2);
+    document.getElementById('profitCost').textContent = 'R$ ' + totalCost.toFixed(2);
+    document.getElementById('profitNet').textContent = 'R$ ' + (totalRevenue - totalCost).toFixed(2);
+    document.getElementById('profitNet').style.color = (totalRevenue - totalCost) >= 0 ? '#22c55e' : '#ef4444';
+    document.getElementById('profitRedAccounts').textContent = redCount;
+  } catch (e) { console.error(e); }
+}
+
+// Hook: load profit when tab opens
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => { if (btn.dataset.tab === 'tabProfit') loadProfit(); });
+});
+
+/* ---- Quota Config ---- */
+async function loadQuotaConfig() {
+  const token = getToken();
+  try {
+    const res = await fetch("/portal/admin/quota-config", { headers: { "x-dashboard-token": token } });
+    if (!res.ok) return;
+    const cfg = await res.json();
+    if (cfg.tetoDiarioDivisor !== undefined) document.getElementById('qcTetoDiario').value = cfg.tetoDiarioDivisor;
+    if (cfg.throttleThreshold !== undefined) document.getElementById('qcThrottle').value = cfg.throttleThreshold;
+    if (cfg.pesoUltimaSemana !== undefined) document.getElementById('qcPesoUltima').value = cfg.pesoUltimaSemana;
+    if (cfg.forfeitSemana1 !== undefined) document.getElementById('qcForfeit1').value = cfg.forfeitSemana1;
+    if (cfg.forfeitSemanasMeio !== undefined) document.getElementById('qcForfeitMeio').value = cfg.forfeitSemanasMeio;
+  } catch {}
+}
+
+async function saveQuotaConfig() {
+  const token = getToken();
+  const cfg = {
+    tetoDiarioDivisor: Number(document.getElementById('qcTetoDiario').value) || 5,
+    throttleThreshold: Number(document.getElementById('qcThrottle').value) || 0.70,
+    pesoUltimaSemana: Number(document.getElementById('qcPesoUltima').value) || 1.5,
+    forfeitSemana1: Number(document.getElementById('qcForfeit1').value) || 1.0,
+    forfeitSemanasMeio: Number(document.getElementById('qcForfeitMeio').value) || 0.5,
+  };
+  try {
+    const res = await fetch("/portal/admin/quota-config", {
+      method: "PUT", headers: { "x-dashboard-token": token, "Content-Type": "application/json" },
+      body: JSON.stringify(cfg)
+    });
+    const data = await res.json();
+    document.getElementById('qcStatus').textContent = data.ok ? '✓ Salvo' : '✗ Erro';
+    setTimeout(() => document.getElementById('qcStatus').textContent = '', 3000);
+  } catch (e) { document.getElementById('qcStatus').textContent = '✗ ' + e.message; }
+}
+
+// Load quota config when profit tab opens
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  const orig = btn._profitListener;
+  btn.addEventListener('click', () => { if (btn.dataset.tab === 'tabProfit') loadQuotaConfig(); });
+});

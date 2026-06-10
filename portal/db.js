@@ -73,6 +73,20 @@ export async function initDB() {
     )
   `);
 
+  // ── Migrations (idempotent) ──
+  // Topups table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS topups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      tokens INTEGER NOT NULL,
+      confirmed_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  // Cache columns on usage_log
+  try { db.run(`ALTER TABLE usage_log ADD COLUMN tokens_cache_write INTEGER NOT NULL DEFAULT 0`); } catch {}
+  try { db.run(`ALTER TABLE usage_log ADD COLUMN tokens_cache_read INTEGER NOT NULL DEFAULT 0`); } catch {}
+
   // Save periodically
   setInterval(() => saveDB(), 30000);
 

@@ -8,7 +8,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import cookieParser from "cookie-parser";
 import portalRouter from './portal/routes.js';
-import { checkPlanLimits, recordPortalUsage } from './portal/ratelimit.js';
+import { checkPlanLimits, recordPortalUsage, setQuotaConfig, getQuotaConfig } from './portal/ratelimit.js';
 import { initDB } from './portal/db.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -130,6 +130,9 @@ const saveConfig = (cfg) => {
 };
 
 let config = loadConfig();
+
+// Load quotaConfig from config.json if present
+if (config.quotaConfig) setQuotaConfig(config.quotaConfig);
 
 // Env var DASHBOARD_PASSWORD é fonte de verdade: se definida, sobrepõe o
 // valor persistido em config.json (unifica painel /dev, proxy e portal).
@@ -384,8 +387,10 @@ const recordUsage = (usage, req, meta) => {
   );
   grState.budget.totalUsd = round4((grState.budget.totalUsd || 0) + estimateUsd(inputTokens, outputTokens));
   // Record portal usage if this is a portal key
+  const cacheWriteTokens = usage.cache_creation_input_tokens || 0;
+  const cacheReadTokens = usage.cache_read_input_tokens || 0;
   if (req?.portalApiKey) {
-    try { recordPortalUsage(req.portalApiKey, inputTokens, outputTokens); } catch {}
+    try { recordPortalUsage(req.portalApiKey, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens); } catch {}
   }
   // Push to detailed usage log
   const costUsd = calcCostUsd(inputTokens, outputTokens);
@@ -1523,6 +1528,80 @@ app.post("/v1/chat/completions", instrument("/v1/chat/completions"), checkAuth, 
   }
 });
 
+
+// ── Auto-cache: inject cache_control on stable/large blocks (max 4 breakpoints) ──
+// Only for Anthropic /v1/messages. Respects existing cache_control from client.
+function injectAutoCache(body) {
+  try {
+    if (!body || !body.messages || !Array.isArray(body.messages)) return;
+    let breakpoints = 0;
+    const MAX_BREAKPOINTS = 4;
+
+    // Helper: check if a block already has cache_control
+    const hasCache = (block) => block && block.cache_control;
+    // Helper: count existing cache_control in entire request
+    const countExisting = () => {
+      let c = 0;
+      if (Array.isArray(body.system)) body.system.forEach(b => { if (hasCache(b)) c++; });
+      else if (body.system && typeof body.system === "object" && hasCache(body.system)) c++;
+      body.messages.forEach(m => {
+        if (Array.isArray(m.content)) m.content.forEach(b => { if (hasCache(b)) c++; });
+      });
+      return c;
+    };
+
+    // If client already set cache_control, respect it
+    if (countExisting() > 0) return;
+
+    // 1. Mark last block of system prompt
+    if (body.system) {
+      if (Array.isArray(body.system) && body.system.length > 0) {
+        const last = body.system[body.system.length - 1];
+        if (last && typeof last === "object") {
+          last.cache_control = { type: "ephemeral" };
+          breakpoints++;
+        }
+      } else if (typeof body.system === "string" && body.system.length > 200) {
+        // Convert string system to array with cache
+        body.system = [{ type: "text", text: body.system, cache_control: { type: "ephemeral" } }];
+        breakpoints++;
+      }
+    }
+
+    // 2. Mark content of older/larger user messages (penultimate user msg)
+    const userMsgs = body.messages.filter(m => m.role === "user");
+    if (userMsgs.length >= 2 && breakpoints < MAX_BREAKPOINTS) {
+      const target = userMsgs[userMsgs.length - 2];
+      if (Array.isArray(target.content) && target.content.length > 0) {
+        const lastBlock = target.content[target.content.length - 1];
+        if (lastBlock && typeof lastBlock === "object" && !hasCache(lastBlock)) {
+          lastBlock.cache_control = { type: "ephemeral" };
+          breakpoints++;
+        }
+      } else if (typeof target.content === "string" && target.content.length > 500) {
+        target.content = [{ type: "text", text: target.content, cache_control: { type: "ephemeral" } }];
+        breakpoints++;
+      }
+    }
+
+    // 3. Mark large early messages (first assistant or first user if large)
+    if (breakpoints < MAX_BREAKPOINTS && body.messages.length >= 4) {
+      const early = body.messages[Math.min(1, body.messages.length - 1)];
+      if (early && early.role === "user") {
+        if (Array.isArray(early.content) && early.content.length > 0) {
+          const lastBlock = early.content[early.content.length - 1];
+          if (lastBlock && typeof lastBlock === "object" && !hasCache(lastBlock)) {
+            lastBlock.cache_control = { type: "ephemeral" };
+            breakpoints++;
+          }
+        }
+      }
+    }
+  } catch {
+    // Safety: never break the request
+  }
+}
+
 // POST /v1/messages (proxy auth)
 app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res) => {
   const guard = preflightGuardrails(req.body, "/v1/messages");
@@ -1533,7 +1612,10 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
   if (!upstreams.length) return res.status(503).json({ error: { message: "No upstreams available" } });
   const isStream = req.body.stream === true;
   const forceNonStream = config.openclawForceNonStreamRetry === true && isStream;
-  const body = forceNonStream ? { ...req.body, stream: false } : req.body;
+  const rawBody = forceNonStream ? { ...req.body, stream: false } : { ...req.body };
+  // ── Auto-cache injection (Anthropic prompt caching) ──
+  injectAutoCache(rawBody);
+  const body = rawBody;
   const reqModel = req.body.model || config.defaultModel;
   const _usageStart = Date.now();
   try {

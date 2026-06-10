@@ -7,37 +7,48 @@ export const PLANS = {
   pro5x: {
     id: 'pro5x',
     name: 'Pro 5x',
-    price: 124.99,
-    tokensMonth: 35_000_000,
+    price: 99.90,
+    tokensMonth: 60_000_000,
     rpm: 15,
     maxTokensReq: 4096,
-    budgetDay: 4_000_000,
-    throttleRange: [4_000_000, 6_000_000],
-    blockAbove: 6_000_000,
+    budgetDay: 3_000_000,
+    throttleRange: [3_000_000, 4_500_000],
+    blockAbove: 4_500_000,
   },
   max10x: {
     id: 'max10x',
     name: 'Max 10x',
-    price: 249.99,
-    tokensMonth: 90_000_000,
+    price: 179.90,
+    tokensMonth: 130_000_000,
     rpm: 25,
     maxTokensReq: 8192,
-    budgetDay: 8_000_000,
-    throttleRange: [8_000_000, 12_000_000],
-    blockAbove: 12_000_000,
+    budgetDay: 6_500_000,
+    throttleRange: [6_500_000, 9_500_000],
+    blockAbove: 9_500_000,
   },
   max20x: {
     id: 'max20x',
     name: 'Max 20x',
-    price: 499.99,
-    tokensMonth: 225_000_000,
+    price: 279.90,
+    tokensMonth: 220_000_000,
     rpm: 40,
     maxTokensReq: 16384,
-    budgetDay: 12_000_000,
-    throttleRange: [12_000_000, 18_000_000],
-    blockAbove: 18_000_000,
+    budgetDay: 11_000_000,
+    throttleRange: [11_000_000, 16_000_000],
+    blockAbove: 16_000_000,
   },
 };
+
+// ── Top-up (pacote extra) ──
+export const TOP_UP = {
+  id: 'topup_15m',
+  name: '+15M tokens',
+  price: 29.90,
+  tokens: 15_000_000,
+};
+
+// Plan ordering for upgrade-only logic
+const PLAN_ORDER = ['pro5x', 'max10x', 'max20x'];
 
 // Gera centavos aleatórios para identificar pagamento
 function randomCents() {
@@ -46,8 +57,42 @@ function randomCents() {
 
 // ── Criar pedido ──
 export async function createOrder(userId, planId) {
+  // Top-up handling
+  if (planId === 'topup_15m') {
+    const activeSub = queryOne(
+      `SELECT * FROM subscriptions WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1`,
+      [userId]
+    );
+    if (!activeSub) throw new Error('Você precisa ter uma assinatura ativa para comprar pacotes extras');
+    const amount = TOP_UP.price + randomCents();
+    const { payload, qrDataUrl } = await generatePixQRCode(amount);
+    const result = run(
+      `INSERT INTO orders (user_id, plan_id, amount_brl, pix_payload, status) VALUES (?, ?, ?, ?, 'pending')`,
+      [userId, 'topup_15m', amount, payload]
+    );
+    const order = queryOne('SELECT * FROM orders WHERE id = ?', [result.lastInsertRowid]);
+    saveDB();
+    const user = queryOne('SELECT * FROM users WHERE id = ?', [userId]);
+    notifyNewOrder(order, user).catch(() => {});
+    return { order, qrDataUrl, payload };
+  }
+
   const plan = PLANS[planId];
   if (!plan) throw new Error('Plano inválido');
+
+  // Upgrade-only: reject downgrade (check highest active plan)
+  const activeSubs = queryAll(
+    `SELECT plan_id FROM subscriptions WHERE user_id = ? AND active = 1`,
+    [userId]
+  );
+  if (activeSubs.length > 0) {
+    const highestIdx = Math.max(...activeSubs.map(s => PLAN_ORDER.indexOf(s.plan_id)).filter(i => i >= 0));
+    const requestedIdx = PLAN_ORDER.indexOf(planId);
+    if (requestedIdx >= 0 && highestIdx >= 0 && requestedIdx < highestIdx) {
+      throw new Error('Não é possível fazer downgrade enquanto houver assinatura ativa superior');
+    }
+  }
+
   const amount = plan.price + randomCents();
 
   const { payload, qrDataUrl } = await generatePixQRCode(amount);
@@ -80,6 +125,16 @@ export function confirmOrder(orderId) {
   if (order.status !== 'pending') throw new Error('Pedido não está pendente');
 
   run(`UPDATE orders SET status = 'confirmed', confirmed_at = datetime('now') WHERE id = ?`, [orderId]);
+
+  // Top-up: add tokens to current month, don't create new subscription
+  if (order.plan_id === 'topup_15m') {
+    run(
+      `INSERT INTO topups (user_id, tokens, confirmed_at) VALUES (?, ?, datetime('now'))`,
+      [order.user_id, TOP_UP.tokens]
+    );
+    saveDB();
+    return { apiKey: null, expiresAt: null, topup: true, tokens: TOP_UP.tokens };
+  }
 
   // Criar subscription (30 dias)
   const apiKey = genPortalApiKey();
@@ -133,4 +188,15 @@ export function getRecentConfirmed(limit = 20) {
      WHERE o.status = 'confirmed' ORDER BY o.confirmed_at DESC LIMIT ?`,
     [limit]
   );
+}
+
+// ── Top-ups do mês para um usuário ──
+export function getTopupsThisMonth(userId) {
+  const d = new Date(); d.setUTCDate(1); d.setUTCHours(0,0,0,0);
+  const monthStart = d.toISOString();
+  const row = queryOne(
+    `SELECT COALESCE(SUM(tokens), 0) as total FROM topups WHERE user_id = ? AND confirmed_at >= ?`,
+    [userId, monthStart]
+  );
+  return row?.total || 0;
 }
