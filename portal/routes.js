@@ -15,6 +15,12 @@ import {
   getAbacateConfig, setAbacateConfig, getKeysMasked,
   addKey, updateKey, removeKey, findKeyById
 } from './abacate.js';
+import {
+  getPlans, setPlans, getPlansDict, getPlanOrder,
+  addPlan, updatePlan, removePlan, findPlan,
+  calculateScenarios, getScenarioMix, setScenarioMix,
+  getMinMargin, setMinMargin, initPlans
+} from './plans-store.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -125,7 +131,11 @@ router.get('/me', requireAuth, (req, res) => {
 
 // GET /portal/plans
 router.get('/plans', (req, res) => {
-  res.json(Object.values(PLANS));
+  const plans = getPlans()
+    .filter(p => p.enabled)
+    .sort((a, b) => a.price - b.price)
+    .map(p => ({ id: p.id, name: p.name, price: p.price, tokensMonth: p.tokensMonth, rpm: p.rpm, maxTokensReq: p.maxTokensReq }));
+  res.json(plans);
 });
 
 // POST /portal/orders
@@ -324,6 +334,84 @@ router.get('/admin/profit', requireAdmin, (req, res) => {
     },
     cost_config: costConfig,
   });
+});
+
+// ── Dynamic Plans CRUD ──
+
+// GET /portal/admin/plans-config — list all plans with viability scenarios
+router.get('/admin/plans-config', requireAdmin, (req, res) => {
+  const cc = getCostConfig();
+  const plans = getPlans().map(p => ({
+    ...p,
+    scenarios: calculateScenarios(p, cc),
+  }));
+  res.json({
+    plans,
+    scenarioMix: getScenarioMix(),
+    minMarginPct: getMinMargin(),
+  });
+});
+
+// POST /portal/admin/plans-config — create plan (with viability check)
+router.post('/admin/plans-config', requireAdmin, (req, res) => {
+  const { force, ...data } = req.body || {};
+  const plan = { ...data, price: Number(data.price) || 0, tokensMonth: Number(data.tokensMonth) || 0 };
+  const cc = getCostConfig();
+  const scenarios = calculateScenarios(plan, cc);
+
+  // Viability check
+  if (!force && scenarios.realistic.margin_pct !== null && scenarios.realistic.margin_pct < getMinMargin()) {
+    return res.status(422).json({
+      error: `Plano inviável: margem realista ${scenarios.realistic.margin_pct.toFixed(1)}% abaixo do mínimo ${getMinMargin()}%`,
+      scenarios,
+      blocked: true,
+    });
+  }
+
+  const created = addPlan(data);
+  const warning = scenarios.worstCase.margin_brl < 0 ? 'Atenção: margem negativa no pior caso' : null;
+  res.json({ ok: true, plan: { ...created, scenarios }, warning });
+});
+
+// PUT /portal/admin/plans-config/:id — update plan
+router.put('/admin/plans-config/:id', requireAdmin, (req, res) => {
+  const { force, ...patch } = req.body || {};
+  const existing = findPlan(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Plano não encontrado' });
+
+  // Preview merged plan for viability
+  const preview = { ...existing, ...patch };
+  if (patch.price !== undefined) preview.price = Number(patch.price);
+  if (patch.tokensMonth !== undefined) preview.tokensMonth = Number(patch.tokensMonth);
+  const cc = getCostConfig();
+  const scenarios = calculateScenarios(preview, cc);
+
+  if (!force && scenarios.realistic.margin_pct !== null && scenarios.realistic.margin_pct < getMinMargin()) {
+    return res.status(422).json({
+      error: `Plano inviável: margem realista ${scenarios.realistic.margin_pct.toFixed(1)}% abaixo do mínimo ${getMinMargin()}%`,
+      scenarios,
+      blocked: true,
+    });
+  }
+
+  const updated = updatePlan(req.params.id, patch);
+  const warning = scenarios.worstCase.margin_brl < 0 ? 'Atenção: margem negativa no pior caso' : null;
+  res.json({ ok: true, plan: { ...updated, scenarios }, warning });
+});
+
+// DELETE /portal/admin/plans-config/:id
+router.delete('/admin/plans-config/:id', requireAdmin, (req, res) => {
+  const ok = removePlan(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'Plano não encontrado' });
+  res.json({ ok: true });
+});
+
+// PUT /portal/admin/plans-scenarios — update scenario mix + min margin
+router.put('/admin/plans-scenarios', requireAdmin, (req, res) => {
+  const { scenarioMix: mix, minMarginPct: mm } = req.body || {};
+  if (mix) setScenarioMix(mix);
+  if (typeof mm === 'number') setMinMargin(mm);
+  res.json({ ok: true, scenarioMix: getScenarioMix(), minMarginPct: getMinMargin() });
 });
 
 // ── AbacatePay admin: key management ──
