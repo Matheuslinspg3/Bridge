@@ -500,23 +500,37 @@ router.put('/admin/asaas-toggle', requireAdmin, (req, res) => {
   res.json({ ok: true, enabled: getAsaasConfig().enabled });
 });
 
-// ── Asaas webhook (PUBLIC, validated by keyId + webhookToken) ──
+// ── Asaas webhook (PUBLIC — ALWAYS returns HTTP 200) ──
 // URL: POST /portal/webhook/asaas/:keyId
-// Security: validates asaas-access-token header against the key's webhookToken.
+//
+// IMPORTANT: This endpoint ALWAYS responds 200 regardless of validation result.
+// Reason: Asaas automatically disables webhooks that return non-2xx responses
+// (health checks, validation pings, or any error). Returning 403/404 causes
+// the webhook to be paused permanently.
+//
+// SECURITY IS MAINTAINED: the actual order confirmation (confirmOrder) only
+// executes when the webhookToken matches AND the keyId is valid. Invalid
+// requests get 200 but are silently ignored (logged as warning).
+//
 // PF safety: contaPF=true → only RECEIVED triggers confirmOrder (not CONFIRMED).
 router.post('/webhook/asaas/:keyId', async (req, res) => {
   const { keyId } = req.params;
   const key = findKeyById(keyId);
-  if (!key) return res.status(404).json({ error: 'Unknown key' });
-
-  // Validate webhook token
-  const incomingToken = req.headers['asaas-access-token'] || req.headers['x-webhook-token'] || '';
-  if (!incomingToken || incomingToken !== key.webhookToken) {
-    return res.status(403).json({ error: 'Invalid webhook token' });
+  if (!key) {
+    console.warn('[webhook/asaas] Ignored: unknown keyId', keyId);
+    return res.status(200).json({ received: true });
   }
 
+  // Validate webhook token — reject silently (200 but no action)
+  const incomingToken = req.headers['asaas-access-token'] || req.headers['x-webhook-token'] || '';
+  if (!incomingToken || incomingToken !== key.webhookToken) {
+    console.warn('[webhook/asaas] Ignored: invalid token for key', keyId);
+    return res.status(200).json({ received: true });
+  }
+
+  // Token valid — process the event
   const { event, payment } = req.body || {};
-  if (!payment || !payment.id) return res.status(200).json({ ok: true });
+  if (!payment || !payment.id) return res.status(200).json({ received: true });
 
   const paymentId = payment.id;
   const status = payment.status; // PENDING, RECEIVED, CONFIRMED, REFUNDED, OVERDUE...
@@ -526,7 +540,7 @@ router.post('/webhook/asaas/:keyId', async (req, res) => {
   if (!order && payment.externalReference) {
     order = queryOne('SELECT * FROM orders WHERE id = ?', [Number(payment.externalReference)]);
   }
-  if (!order) return res.status(200).json({ ok: true, note: 'order not found' });
+  if (!order) return res.status(200).json({ received: true, note: 'order not found' });
 
   // PF safety: CONFIRMED is provisional for PF accounts (72h antifraude)
   // Only confirm on RECEIVED for PF; PJ accepts both CONFIRMED and RECEIVED
@@ -538,16 +552,15 @@ router.post('/webhook/asaas/:keyId', async (req, res) => {
   })();
 
   if (isConfirmEvent && shouldConfirm) {
-    if (order.status === 'confirmed') return res.status(200).json({ ok: true, note: 'already confirmed' });
+    if (order.status === 'confirmed') return res.status(200).json({ received: true, note: 'already confirmed' });
     try {
       confirmOrder(order.id);
     } catch (err) {
       console.error('[webhook/asaas] confirmOrder error:', err.message);
     }
   } else if (status === 'CONFIRMED' && key.contaPF) {
-    // PF: CONFIRMED is provisional — do NOT confirm, just log
+    // PF: CONFIRMED is provisional — do NOT confirm
     // Payment is still under fraud analysis (up to 72h)
-    // Will be confirmed when RECEIVED arrives
   } else if (['REFUNDED', 'REFUND_REQUESTED'].includes(status) || event === 'PAYMENT_REFUNDED') {
     if (order.status === 'confirmed') {
       run(`UPDATE orders SET status = 'refunded' WHERE id = ?`, [order.id]);
@@ -561,7 +574,7 @@ router.post('/webhook/asaas/:keyId', async (req, res) => {
     }
   }
 
-  res.status(200).json({ ok: true });
+  res.status(200).json({ received: true });
 });
 
 // ── Expiration check (run periodically) ──
