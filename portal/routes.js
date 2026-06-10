@@ -199,7 +199,11 @@ router.delete('/admin/users/:email', requireAdmin, (req, res) => {
     const email = String(req.params.email || '').trim().toLowerCase();
     const user = queryOne('SELECT id, email FROM users WHERE lower(email) = ?', [email]);
     if (!user) return res.status(404).json({ error: 'Usuário não encontrado' });
-    run('DELETE FROM usage_log WHERE user_id = ?', [user.id]);
+    // usage_log é indexado por api_key — apagar pelos keys das subscriptions do user
+    const subs = queryAll('SELECT api_key FROM subscriptions WHERE user_id = ?', [user.id]);
+    for (const s of subs) {
+      if (s.api_key) run('DELETE FROM usage_log WHERE api_key = ?', [s.api_key]);
+    }
     run('DELETE FROM subscriptions WHERE user_id = ?', [user.id]);
     run('DELETE FROM orders WHERE user_id = ?', [user.id]);
     try { run('DELETE FROM topups WHERE user_id = ?', [user.id]); } catch {}
