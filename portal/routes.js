@@ -22,6 +22,26 @@ import {
   getMinMargin, setMinMargin
 } from './plans-store.js';
 
+// ── CPF validation ──
+function validateCpf(raw) {
+  const cpf = (raw || '').replace(/\D/g, '');
+  if (cpf.length !== 11) return null;
+  // Reject known invalid sequences
+  if (/^(\d)\1{10}$/.test(cpf)) return null;
+  // Verify check digits
+  let sum = 0;
+  for (let i = 0; i < 9; i++) sum += parseInt(cpf[i]) * (10 - i);
+  let d1 = 11 - (sum % 11);
+  if (d1 >= 10) d1 = 0;
+  if (parseInt(cpf[9]) !== d1) return null;
+  sum = 0;
+  for (let i = 0; i < 10; i++) sum += parseInt(cpf[i]) * (11 - i);
+  let d2 = 11 - (sum % 11);
+  if (d2 >= 10) d2 = 0;
+  if (parseInt(cpf[10]) !== d2) return null;
+  return cpf; // returns clean digits
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -46,19 +66,26 @@ router.use(express.static(path.join(__dirname, 'public')));
 // POST /portal/register
 router.post('/register', async (req, res) => {
   try {
-    const { email, password, name } = req.body || {};
+    const { email, password, name, cpf } = req.body || {};
     if (!email || !password)
       return res.status(400).json({ error: 'Email e senha obrigatórios' });
     if (password.length < 6)
       return res.status(400).json({ error: 'Senha mínima: 6 caracteres' });
+
+    // Validate CPF if provided
+    let cleanCpf = null;
+    if (cpf) {
+      cleanCpf = validateCpf(cpf);
+      if (!cleanCpf) return res.status(400).json({ error: 'CPF inválido' });
+    }
 
     const existing = queryOne('SELECT id FROM users WHERE email = ?', [email]);
     if (existing) return res.status(409).json({ error: 'Email já cadastrado' });
 
     const hash = hashPassword(password);
     const result = run(
-      'INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)',
-      [email, hash, name || '']
+      'INSERT INTO users (email, password_hash, name, cpf) VALUES (?, ?, ?, ?)',
+      [email, hash, name || '', cleanCpf]
     );
     saveDB();
 
@@ -128,6 +155,19 @@ router.get('/me', requireAuth, (req, res) => {
   });
 });
 
+// PUT /portal/me — update user profile (CPF)
+router.put('/me', requireAuth, (req, res) => {
+  const { cpf } = req.body || {};
+  if (cpf !== undefined) {
+    const cleanCpf = validateCpf(cpf);
+    if (!cleanCpf) return res.status(400).json({ error: 'CPF inválido' });
+    run('UPDATE users SET cpf = ? WHERE id = ?', [cleanCpf, req.portalUser.id]);
+    saveDB();
+  }
+  const user = queryOne('SELECT * FROM users WHERE id = ?', [req.portalUser.id]);
+  res.json({ ok: true, cpf: user.cpf });
+});
+
 // ── Billing routes ──
 
 // GET /portal/plans
@@ -153,7 +193,8 @@ router.post('/orders', requireAuth, async (req, res) => {
       pix_payload: result.payload,
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    const status = e.message && e.message.includes('CPF') ? 422 : 500;
+    res.status(status).json({ error: e.message, ...(status === 422 ? { needCpf: true } : {}) });
   }
 });
 
