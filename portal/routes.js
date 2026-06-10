@@ -181,6 +181,36 @@ router.post('/admin/payments/:id/reject', requireAdmin, (req, res) => {
   }
 });
 
+// GET /portal/admin/users — lista contas
+router.get('/admin/users', requireAdmin, (req, res) => {
+  const users = queryAll(`
+    SELECT u.id, u.email, u.name, u.created_at, u.enabled,
+      s.plan_id, s.active as sub_active, s.expires_at
+    FROM users u
+    LEFT JOIN subscriptions s ON s.user_id = u.id AND s.active = 1
+    ORDER BY u.created_at DESC
+  `);
+  res.json(users);
+});
+
+// DELETE /portal/admin/users/:email — remove conta e todos os dados relacionados
+router.delete('/admin/users/:email', requireAdmin, (req, res) => {
+  try {
+    const email = String(req.params.email || '').trim().toLowerCase();
+    const user = queryOne('SELECT id, email FROM users WHERE lower(email) = ?', [email]);
+    if (!user) return res.status(404).json({ error: 'Usuário não encontrado' });
+    run('DELETE FROM usage_log WHERE user_id = ?', [user.id]);
+    run('DELETE FROM subscriptions WHERE user_id = ?', [user.id]);
+    run('DELETE FROM orders WHERE user_id = ?', [user.id]);
+    try { run('DELETE FROM topups WHERE user_id = ?', [user.id]); } catch {}
+    run('DELETE FROM users WHERE id = ?', [user.id]);
+    saveDB();
+    res.json({ ok: true, deleted: user.email });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // GET /portal/admin/quota-config
 router.get('/admin/quota-config', requireAdmin, (req, res) => {
   res.json(getQuotaConfig());
