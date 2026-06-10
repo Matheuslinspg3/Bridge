@@ -141,6 +141,7 @@ router.get('/me', requireAuth, (req, res) => {
 
   res.json({
     id: user.id,
+    cpf: user.cpf || null,
     email: user.email,
     name: user.name,
     subscription: sub ? {
