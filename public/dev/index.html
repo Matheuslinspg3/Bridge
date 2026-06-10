@@ -279,6 +279,46 @@
 
     <!-- ============ TAB: PAYMENTS ============ -->
     <div id="tabPayments" class="hidden">
+      <!-- Asaas Integration -->
+      <section class="grid">
+        <div class="box">
+          <h3>Integração Asaas (PIX automático)</h3>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:1rem">
+            <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer">
+              <input type="checkbox" id="asaasToggle" onchange="toggleAsaas(this.checked)">
+              <span>Pagamento automático Asaas</span>
+            </label>
+            <span id="asaasStatus" style="font-size:12px;color:var(--text3)"></span>
+          </div>
+
+          <!-- Keys table -->
+          <div id="asaasKeysList" style="margin-bottom:1.5rem"></div>
+
+          <!-- Add key form -->
+          <details id="asaasAddForm" style="margin-top:1rem">
+            <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--accent)">+ Adicionar chave Asaas</summary>
+            <div style="margin-top:0.75rem;display:grid;gap:8px;max-width:500px">
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <input id="asaasLabel" placeholder="Label (ex: Conta PF)" style="flex:1;min-width:150px;padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text1)">
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <input id="asaasApiKey" type="password" placeholder="access_token (API key)" style="flex:1;min-width:200px;padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text1)">
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <input id="asaasWebhookToken" placeholder="Webhook token" style="flex:1;min-width:180px;padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text1)">
+                <button class="btn-sm" onclick="generateWebhookToken()" title="Gerar token aleatório">🎲 Gerar</button>
+              </div>
+              <div style="display:flex;gap:16px;align-items:center;font-size:12px">
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="asaasSandbox" checked> Sandbox</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="asaasContaPF" checked> Conta PF</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="asaasEnabled" checked> Habilitada</label>
+              </div>
+              <div><button class="btn-sm" onclick="addAsaasKey()">Salvar chave</button> <span id="asaasAddStatus" style="font-size:12px"></span></div>
+            </div>
+          </details>
+        </div>
+      </section>
+
       <section class="grid">
         <div class="box">
           <h3>Pedidos Pendentes</h3>

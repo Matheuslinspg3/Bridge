@@ -914,10 +914,130 @@ async function rejectPayment(id) {
   } catch (e) { alert(`Erro: ${e.message}`); }
 }
 
-// Hook into tab switching to load payments
+/* ---- Asaas Keys Management ---- */
+const WEBHOOK_BASE = window.location.origin + '/portal/webhook/asaas/';
+
+async function loadAsaasKeys() {
+  const token = getToken();
+  try {
+    const res = await fetch("/portal/admin/asaas-keys", { headers: { "x-dashboard-token": token } });
+    if (!res.ok) return;
+    const data = await res.json();
+
+    // Toggle state
+    document.getElementById('asaasToggle').checked = data.enabled;
+    document.getElementById('asaasStatus').textContent = data.enabled ? '✅ Ativo' : '⏸️ Desativado';
+
+    // Keys table
+    const container = document.getElementById('asaasKeysList');
+    if (!data.keys || data.keys.length === 0) {
+      container.innerHTML = '<p class="muted" style="font-size:12px">Nenhuma chave cadastrada.</p>';
+      return;
+    }
+
+    let html = '<div class="table-scroll"><table class="mini"><thead><tr><th>Label</th><th>API Key</th><th>Webhook Token</th><th>Tipo</th><th>Env</th><th>Status</th><th>Webhook URL</th><th>Ações</th></tr></thead><tbody>';
+    for (const k of data.keys) {
+      const tipoBadge = k.contaPF ? '<span style="background:#fbbf24;color:#000;padding:1px 6px;border-radius:3px;font-size:10px">PF</span>' : '<span style="background:#60a5fa;color:#000;padding:1px 6px;border-radius:3px;font-size:10px">PJ</span>';
+      const envBadge = k.sandbox ? '<span style="background:#a78bfa;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px">SANDBOX</span>' : '<span style="background:#f87171;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px">PRODUÇÃO</span>';
+      const statusBadge = k.enabled ? '<span style="color:#22c55e">●</span>' : '<span style="color:#ef4444">●</span>';
+      const webhookUrl = WEBHOOK_BASE + k.id;
+      html += '<tr>';
+      html += '<td><strong>' + escHtml(k.label) + '</strong><br><code style="font-size:10px;color:var(--text3)">' + k.id + '</code></td>';
+      html += '<td><code style="font-size:11px">' + escHtml(k.apiKey) + '</code></td>';
+      html += '<td><code style="font-size:11px">' + escHtml(k.webhookToken) + '</code></td>';
+      html += '<td>' + tipoBadge + '</td>';
+      html += '<td>' + envBadge + '</td>';
+      html += '<td>' + statusBadge + ' ' + (k.enabled ? 'On' : 'Off') + '</td>';
+      html += '<td><div style="display:flex;align-items:center;gap:4px"><code style="font-size:9px;word-break:break-all;max-width:180px">' + escHtml(webhookUrl) + '</code><button class="btn-sm" style="font-size:10px;padding:2px 5px" onclick="copyText(\'' + webhookUrl + '\')">📋</button></div></td>';
+      html += '<td style="white-space:nowrap">';
+      html += '<button class="btn-sm" style="font-size:10px;padding:2px 6px" onclick="toggleAsaasKey(\'' + k.id + '\',' + (!k.enabled) + ')">' + (k.enabled ? '⏸️' : '▶️') + '</button> ';
+      html += '<button class="btn-sm" style="font-size:10px;padding:2px 6px;background:#ef4444;color:#fff" onclick="removeAsaasKey(\'' + k.id + '\')">🗑️</button>';
+      html += '</td></tr>';
+    }
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+  } catch (e) { console.error(e); }
+}
+
+async function toggleAsaas(enabled) {
+  const token = getToken();
+  await fetch("/portal/admin/asaas-toggle", {
+    method: "PUT", headers: { "x-dashboard-token": token, "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled })
+  });
+  loadAsaasKeys();
+}
+
+async function toggleAsaasKey(keyId, enabled) {
+  const token = getToken();
+  await fetch("/portal/admin/asaas-keys/" + keyId, {
+    method: "PUT", headers: { "x-dashboard-token": token, "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled })
+  });
+  loadAsaasKeys();
+}
+
+async function removeAsaasKey(keyId) {
+  if (!confirm('Remover esta chave Asaas?')) return;
+  const token = getToken();
+  await fetch("/portal/admin/asaas-keys/" + keyId, {
+    method: "DELETE", headers: { "x-dashboard-token": token }
+  });
+  loadAsaasKeys();
+}
+
+async function addAsaasKey() {
+  const token = getToken();
+  const label = document.getElementById('asaasLabel').value.trim();
+  const apiKey = document.getElementById('asaasApiKey').value.trim();
+  const webhookToken = document.getElementById('asaasWebhookToken').value.trim();
+  const sandbox = document.getElementById('asaasSandbox').checked;
+  const contaPF = document.getElementById('asaasContaPF').checked;
+  const enabled = document.getElementById('asaasEnabled').checked;
+  const statusEl = document.getElementById('asaasAddStatus');
+
+  if (!label || !apiKey || !webhookToken) {
+    statusEl.textContent = '❌ Preencha label, API key e webhook token';
+    statusEl.style.color = '#ef4444';
+    return;
+  }
+
+  const res = await fetch("/portal/admin/asaas-keys", {
+    method: "POST", headers: { "x-dashboard-token": token, "Content-Type": "application/json" },
+    body: JSON.stringify({ label, apiKey, webhookToken, sandbox, contaPF, enabled })
+  });
+  const data = await res.json();
+  if (res.ok) {
+    statusEl.textContent = '✅ Chave adicionada';
+    statusEl.style.color = '#22c55e';
+    document.getElementById('asaasLabel').value = '';
+    document.getElementById('asaasApiKey').value = '';
+    document.getElementById('asaasWebhookToken').value = '';
+    loadAsaasKeys();
+  } else {
+    statusEl.textContent = '❌ ' + (data.error || 'Erro');
+    statusEl.style.color = '#ef4444';
+  }
+  setTimeout(() => statusEl.textContent = '', 4000);
+}
+
+function generateWebhookToken() {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let token = 'whk_';
+  for (let i = 0; i < 32; i++) token += chars[Math.floor(Math.random() * chars.length)];
+  document.getElementById('asaasWebhookToken').value = token;
+}
+
+function copyText(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    // Brief visual feedback could be added here
+  });
+}
+
+// Hook into tab switching to load payments + asaas keys
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    if (btn.dataset.tab === 'tabPayments') loadPayments();
+    if (btn.dataset.tab === 'tabPayments') { loadPayments(); loadAsaasKeys(); }
   });
 });
 
