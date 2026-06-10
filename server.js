@@ -9,6 +9,7 @@ import { fileURLToPath } from "url";
 import cookieParser from "cookie-parser";
 import portalRouter, { setCostConfig, getCostConfig } from './portal/routes.js';
 import { setAbacateConfig, getAbacateConfig } from './portal/abacate.js';
+import { initPlans, getPlans, getScenarioMix, getMinMargin } from './portal/plans-store.js';
 import { checkPlanLimits, recordPortalUsage, setQuotaConfig, getQuotaConfig } from './portal/ratelimit.js';
 import { initDB } from './portal/db.js';
 
@@ -136,15 +137,29 @@ let config = loadConfig();
 if (config.quotaConfig) setQuotaConfig(config.quotaConfig);
 if (config.costConfig) setCostConfig(config.costConfig);
 if (config.abacatePay) setAbacateConfig(config.abacatePay);
+initPlans(config.plans, config.scenarioMix, config.minMarginPct);
 
-// Persist abacatePay config changes periodically
+// Persist config changes periodically (abacatePay + plans + scenarios)
 setInterval(() => {
   try {
-    const current = getAbacateConfig();
-    if (JSON.stringify(config.abacatePay) !== JSON.stringify(current)) {
-      config.abacatePay = current;
-      saveConfig(config);
+    let changed = false;
+    const abacate = getAbacateConfig();
+    if (JSON.stringify(config.abacatePay) !== JSON.stringify(abacate)) {
+      config.abacatePay = abacate; changed = true;
     }
+    const plans = getPlans();
+    if (JSON.stringify(config.plans) !== JSON.stringify(plans)) {
+      config.plans = plans; changed = true;
+    }
+    const mix = getScenarioMix();
+    if (JSON.stringify(config.scenarioMix) !== JSON.stringify(mix)) {
+      config.scenarioMix = mix; changed = true;
+    }
+    const mm = getMinMargin();
+    if (config.minMarginPct !== mm) {
+      config.minMarginPct = mm; changed = true;
+    }
+    if (changed) saveConfig(config);
   } catch {}
 }, 5000);
 

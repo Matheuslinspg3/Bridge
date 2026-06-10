@@ -3,42 +3,21 @@ import { generatePixQRCode } from './pix.js';
 import { notifyNewOrder } from './notify.js';
 import { getAbacateConfig, getNextKey, createAbacateCharge } from './abacate.js';
 
-// ── Planos ──
-export const PLANS = {
-  pro5x: {
-    id: 'pro5x',
-    name: 'Pro 5x',
-    price: 99.90,
-    tokensMonth: 60_000_000,
-    rpm: 15,
-    maxTokensReq: 4096,
-    budgetDay: 3_000_000,
-    throttleRange: [3_000_000, 4_500_000],
-    blockAbove: 4_500_000,
+import { getPlansDict, getPlanOrder } from './plans-store.js';
+
+// ── Dynamic Plans (read from config via plans-store) ──
+// PLANS is a getter that returns current plan dict
+export function getPLANS() { return getPlansDict(); }
+// Backward compat: PLANS as a proxy-like object that always reads fresh
+export const PLANS = new Proxy({}, {
+  get(_, prop) { return getPlansDict()[prop]; },
+  has(_, prop) { return prop in getPlansDict(); },
+  ownKeys() { return Object.keys(getPlansDict()); },
+  getOwnPropertyDescriptor(_, prop) {
+    const dict = getPlansDict();
+    if (prop in dict) return { value: dict[prop], enumerable: true, configurable: true };
   },
-  max10x: {
-    id: 'max10x',
-    name: 'Max 10x',
-    price: 179.90,
-    tokensMonth: 130_000_000,
-    rpm: 25,
-    maxTokensReq: 8192,
-    budgetDay: 6_500_000,
-    throttleRange: [6_500_000, 9_500_000],
-    blockAbove: 9_500_000,
-  },
-  max20x: {
-    id: 'max20x',
-    name: 'Max 20x',
-    price: 279.90,
-    tokensMonth: 220_000_000,
-    rpm: 40,
-    maxTokensReq: 16384,
-    budgetDay: 11_000_000,
-    throttleRange: [11_000_000, 16_000_000],
-    blockAbove: 16_000_000,
-  },
-};
+});
 
 // ── Top-up (pacote extra) ──
 export const TOP_UP = {
@@ -48,8 +27,8 @@ export const TOP_UP = {
   tokens: 15_000_000,
 };
 
-// Plan ordering for upgrade-only logic
-const PLAN_ORDER = ['pro5x', 'max10x', 'max20x'];
+// Plan ordering: dynamic, sorted by price ascending
+function getPLAN_ORDER() { return getPlanOrder(); }
 
 // Gera centavos aleatórios para identificar pagamento
 function randomCents() {
@@ -87,8 +66,8 @@ export async function createOrder(userId, planId) {
     [userId]
   );
   if (activeSubs.length > 0) {
-    const highestIdx = Math.max(...activeSubs.map(s => PLAN_ORDER.indexOf(s.plan_id)).filter(i => i >= 0));
-    const requestedIdx = PLAN_ORDER.indexOf(planId);
+    const highestIdx = Math.max(...activeSubs.map(s => getPLAN_ORDER().indexOf(s.plan_id)).filter(i => i >= 0));
+    const requestedIdx = getPLAN_ORDER().indexOf(planId);
     if (requestedIdx >= 0 && highestIdx >= 0 && requestedIdx < highestIdx) {
       throw new Error('Não é possível fazer downgrade enquanto houver assinatura ativa superior');
     }
