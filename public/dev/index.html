@@ -397,6 +397,20 @@
         <div class="box">
           <h3>Provedores</h3>
           <div id="providersList"></div>
+          <details style="margin-top:1rem"><summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--accent)">+ Adicionar provedor</summary>
+            <div style="margin-top:0.75rem;display:grid;gap:8px;max-width:500px">
+              <input id="newProvLabel" placeholder="Label (ex: Revenda XYZ)" style="padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text1)">
+              <input id="newProvUrl" placeholder="Base URL (https://api...)" style="padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text1)">
+              <input id="newProvKey" type="password" placeholder="API Key" style="padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text1)">
+              <div style="display:flex;gap:12px;align-items:center;font-size:12px">
+                <label><input type="checkbox" id="newProvEnabled"> Habilitado</label>
+                <label>Priority <input id="newProvPriority" value="" placeholder="auto" style="width:50px;margin-left:4px;padding:2px 4px;border:1px solid var(--border);border-radius:3px;background:var(--bg2);color:var(--text1)"></label>
+              </div>
+              <label style="font-size:11px;color:var(--text3)">Modelos (JSON):</label>
+              <textarea id="newProvModels" rows="3" placeholder='[{"name":"claude-opus-4-7","tier":1,"cost":{"input":15,"output":75,"cacheWrite":18.75,"cacheRead":1.5}}]' style="font-size:11px;font-family:monospace;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text1);resize:vertical"></textarea>
+              <div><button class="btn-sm" onclick="createProvider()">Criar provedor</button> <span id="newProvStatus" style="font-size:11px"></span></div>
+            </div>
+          </details>
         </div>
       </section>
     </div>

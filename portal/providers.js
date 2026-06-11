@@ -1,3 +1,5 @@
+import { randomBytes } from "crypto";
+
 /**
  * Multi-provider failover with model-tier awareness.
  *
@@ -135,7 +137,21 @@ export function getCircuitStatus() {
 
 // ── CRUD (for future /dev UI) ──
 export function addProvider(data) {
-  providers.push(data);
+  if (!data.label || !data.baseUrl || !data.apiKey) {
+    throw new Error('label, baseUrl e apiKey são obrigatórios');
+  }
+  const maxPriority = providers.reduce((max, p) => Math.max(max, p.priority || 0), 0);
+  const provider = {
+    id: data.id || randomBytes(6).toString('hex'),
+    label: data.label,
+    baseUrl: data.baseUrl,
+    apiKey: data.apiKey,
+    enabled: data.enabled ?? false,
+    priority: data.priority ?? (maxPriority + 1),
+    models: data.models || [],
+  };
+  providers.push(provider);
+  return provider;
 }
 export function updateProvider(id, patch) {
   const p = providers.find(x => x.id === id);
