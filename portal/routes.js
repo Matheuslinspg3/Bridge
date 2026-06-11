@@ -15,6 +15,7 @@ import {
   getAsaasConfig, setAsaasConfig, getKeysMasked,
   addKey, updateKey, removeKey, findKeyById
 } from './asaas.js';
+import { getProviders, updateProvider, getFailoverConfig, setFailoverConfig, getCircuitStatus } from './providers.js';
 import { persistNow } from './config-persist.js';
 import {
   getPlans, getPlansDict, getPlanOrder,
@@ -461,6 +462,32 @@ router.put('/admin/plans-scenarios', requireAdmin, (req, res) => {
   if (typeof mm === 'number') setMinMargin(mm);
   persistNow();
   res.json({ ok: true, scenarioMix: getScenarioMix(), minMarginPct: getMinMargin() });
+});
+
+// ── Providers / Failover admin ──
+
+// GET /portal/admin/providers — list providers (apiKey masked)
+router.get('/admin/providers', requireAdmin, (req, res) => {
+  const providers = getProviders().map(p => ({
+    ...p,
+    apiKey: p.apiKey ? '****' + p.apiKey.slice(-4) : '',
+  }));
+  res.json({ providers, failoverConfig: getFailoverConfig(), circuitStatus: getCircuitStatus() });
+});
+
+// PUT /portal/admin/providers/:id — update provider
+router.put('/admin/providers/:id', requireAdmin, (req, res) => {
+  const ok = updateProvider(req.params.id, req.body || {});
+  if (!ok) return res.status(404).json({ error: 'Provider not found' });
+  persistNow();
+  res.json({ ok: true });
+});
+
+// PUT /portal/admin/failover-config — update failover settings
+router.put('/admin/failover-config', requireAdmin, (req, res) => {
+  setFailoverConfig(req.body || {});
+  persistNow();
+  res.json({ ok: true, config: getFailoverConfig() });
 });
 
 // ── Asaas admin: key management ──
