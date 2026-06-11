@@ -1788,11 +1788,18 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
       return res.status(upstreamRes.status).json({ error: { message: errBody } });
     }
     touchApiKey(req.apiKeyObj, false);
+    // Always set transparency headers (legacy path uses upstream[0] info)
+    const _legacyUpName = (upstreams[0]||{}).id || (upstreams[0]||{}).name || 'legacy';
+    res.setHeader('x-bridge-served-model', reqModel);
+    res.setHeader('x-bridge-provider', _legacyUpName);
+    res.setHeader('x-bridge-fallback', 'false');
     if (isStream && !forceNonStream) {
       copyAnthropicHeaders(upstreamRes, res);
       await sendUpstreamResponse(upstreamRes, res);
     } else {
       const data = await upstreamRes.json();
+      // Update served-model from actual response if available
+      if (data.model) res.setHeader('x-bridge-served-model', data.model);
       recordUsage(data.usage, req, { model: reqModel, route: '/v1/messages', upstream: (upstreams[0]||{}).name || '\u2014', durationMs: Date.now() - _usageStart, ok: true, requestId: data.id || null });
       detectModelSwap(reqModel, data.model, "/v1/messages");
       copyAnthropicHeaders(upstreamRes, res);
