@@ -132,6 +132,7 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
     $("#tabSettings").classList.toggle("hidden", tab !== "tabSettings");
     $("#tabPayments").classList.toggle("hidden", tab !== "tabPayments");
     $("#tabProfit").classList.toggle("hidden", tab !== "tabProfit");
+    $("#tabProviders").classList.toggle("hidden", tab !== "tabProviders");
     if (tab === "tabSettings") refreshSettings();
     if (tab === "tabKeys") refreshKeys();
     if (tab === "tabUsage") refreshUsage();
@@ -1036,10 +1037,11 @@ function copyText(text) {
   });
 }
 
-// Hook into tab switching to load payments + asaas keys
+// Hook into tab switching to load payments + asaas keys + providers
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     if (btn.dataset.tab === 'tabPayments') { loadPayments(); loadAsaasKeys(); }
+    if (btn.dataset.tab === 'tabProviders') { loadProviders(); }
   });
 });
 
@@ -1146,4 +1148,132 @@ async function saveCostConfig() {
     });
     loadProfit(); // Reload with new config
   } catch (e) { console.error(e); }
+}
+
+
+/* ---- Providers / Failover Tab ---- */
+async function loadProviders() {
+  const token = getToken();
+  // Load failover config
+  try {
+    const fcRes = await fetch("/portal/admin/failover-config", { headers: { "x-dashboard-token": token } });
+    if (fcRes.ok) {
+      const fc = await fcRes.json();
+      document.getElementById('foTimeout').value = fc.timeoutMs || 30000;
+      document.getElementById('foCooldown').value = fc.cooldownMs || 60000;
+    }
+  } catch {}
+
+  // Load providers
+  try {
+    const res = await fetch("/portal/admin/providers", { headers: { "x-dashboard-token": token } });
+    if (!res.ok) return;
+    const data = await res.json();
+    renderProviders(data.providers || []);
+  } catch (e) { console.error(e); }
+}
+
+function renderProviders(providers) {
+  const container = document.getElementById('providersList');
+  if (!providers.length) {
+    container.innerHTML = '<p class="muted">Nenhum provedor configurado.</p>';
+    return;
+  }
+  let html = '';
+  for (const p of providers) {
+    const statusBadge = p.enabled ? '<span style="color:#22c55e">● Ativo</span>' : '<span style="color:#ef4444">● Desativado</span>';
+    html += '<div style="border:1px solid var(--border);border-radius:8px;padding:1rem;margin-bottom:1rem">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">';
+    html += '<div><strong>' + escHtml(p.label) + '</strong> <code style="font-size:10px;color:var(--text3)">' + p.id + '</code> ' + statusBadge + '</div>';
+    html += '<span style="font-size:11px;color:var(--text3)">Priority: ' + p.priority + '</span>';
+    html += '</div>';
+
+    // Provider details
+    html += '<div style="font-size:12px;margin-bottom:0.5rem">';
+    html += '<span style="color:var(--text3)">Base URL:</span> <code>' + escHtml(p.baseUrl || '(vazio)') + '</code>';
+    html += ' &nbsp; <span style="color:var(--text3)">API Key:</span> <code>' + escHtml(p.apiKey || '—') + '</code>';
+    html += '</div>';
+
+    // Models table
+    if (p.models && p.models.length > 0) {
+      html += '<div class="table-scroll"><table class="mini"><thead><tr><th>Tier</th><th>Modelo</th><th>In ¥/M</th><th>Out ¥/M</th><th>CacheW</th><th>CacheR</th></tr></thead><tbody>';
+      for (const m of p.models.sort((a,b) => a.tier - b.tier)) {
+        html += '<tr><td>' + m.tier + '</td><td><code>' + escHtml(m.name) + '</code></td>';
+        html += '<td>' + (m.cost?.input || 0) + '</td><td>' + (m.cost?.output || 0) + '</td>';
+        html += '<td>' + (m.cost?.cacheWrite || 0) + '</td><td>' + (m.cost?.cacheRead || 0) + '</td></tr>';
+      }
+      html += '</tbody></table></div>';
+    } else {
+      html += '<p class="muted" style="font-size:11px">Nenhum modelo configurado</p>';
+    }
+
+    // Edit form (collapsed)
+    html += '<details style="margin-top:0.75rem"><summary style="cursor:pointer;font-size:12px;color:var(--accent)">Editar provedor</summary>';
+    html += '<div style="margin-top:0.5rem;display:grid;gap:6px;max-width:500px">';
+    html += '<input id="prov_label_' + p.id + '" value="' + escHtml(p.label) + '" placeholder="Label" style="padding:4px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text1);font-size:12px">';
+    html += '<input id="prov_url_' + p.id + '" value="' + escHtml(p.baseUrl || '') + '" placeholder="Base URL (ex: https://api.anthropic.com)" style="padding:4px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text1);font-size:12px">';
+    html += '<input id="prov_key_' + p.id + '" type="password" placeholder="API Key (deixe vazio para manter)" style="padding:4px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text1);font-size:12px">';
+    html += '<div style="display:flex;gap:12px;align-items:center;font-size:12px">';
+    html += '<label><input type="checkbox" id="prov_enabled_' + p.id + '"' + (p.enabled ? ' checked' : '') + '> Habilitado</label>';
+    html += '<label>Priority <input id="prov_priority_' + p.id + '" value="' + p.priority + '" style="width:40px;margin-left:4px;padding:2px 4px;border:1px solid var(--border);border-radius:3px;background:var(--bg2);color:var(--text1)"></label>';
+    html += '</div>';
+    // Models editor (textarea JSON)
+    html += '<label style="font-size:11px;color:var(--text3)">Modelos (JSON):</label>';
+    html += '<textarea id="prov_models_' + p.id + '" rows="4" style="font-size:11px;font-family:monospace;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text1);resize:vertical">' + JSON.stringify(p.models || [], null, 1).replace(/</g, '&lt;') + '</textarea>';
+    html += '<div><button class="btn-sm" onclick="saveProvider(\'' + p.id + '\')">Salvar</button> <span id="prov_status_' + p.id + '" style="font-size:11px"></span></div>';
+    html += '</div></details>';
+    html += '</div>';
+  }
+  container.innerHTML = html;
+}
+
+async function saveProvider(id) {
+  const token = getToken();
+  const label = document.getElementById('prov_label_' + id)?.value;
+  const baseUrl = document.getElementById('prov_url_' + id)?.value;
+  const apiKey = document.getElementById('prov_key_' + id)?.value || undefined;
+  const enabled = document.getElementById('prov_enabled_' + id)?.checked;
+  const priority = parseInt(document.getElementById('prov_priority_' + id)?.value) || 1;
+  const statusEl = document.getElementById('prov_status_' + id);
+  let models;
+  try {
+    models = JSON.parse(document.getElementById('prov_models_' + id)?.value || '[]');
+  } catch (e) {
+    if (statusEl) { statusEl.textContent = '❌ JSON inválido nos modelos'; statusEl.style.color = '#ef4444'; }
+    return;
+  }
+  const patch = { label, baseUrl, enabled, priority, models };
+  if (apiKey) patch.apiKey = apiKey;
+
+  const res = await fetch("/portal/admin/providers/" + id, {
+    method: "PUT",
+    headers: { "x-dashboard-token": token, "Content-Type": "application/json" },
+    body: JSON.stringify(patch)
+  });
+  if (res.ok) {
+    if (statusEl) { statusEl.textContent = '✅ Salvo'; statusEl.style.color = '#22c55e'; }
+    setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3000);
+    loadProviders();
+  } else {
+    const err = await res.json().catch(() => ({}));
+    if (statusEl) { statusEl.textContent = '❌ ' + (err.error || 'Erro'); statusEl.style.color = '#ef4444'; }
+  }
+}
+
+async function saveFailoverConfig() {
+  const token = getToken();
+  const timeoutMs = parseInt(document.getElementById('foTimeout').value) || 30000;
+  const cooldownMs = parseInt(document.getElementById('foCooldown').value) || 60000;
+  const statusEl = document.getElementById('foStatus');
+  const res = await fetch("/portal/admin/failover-config", {
+    method: "PUT",
+    headers: { "x-dashboard-token": token, "Content-Type": "application/json" },
+    body: JSON.stringify({ timeoutMs, cooldownMs })
+  });
+  if (res.ok) {
+    statusEl.textContent = '✅ Salvo'; statusEl.style.color = '#22c55e';
+    setTimeout(() => statusEl.textContent = '', 3000);
+  } else {
+    statusEl.textContent = '❌ Erro'; statusEl.style.color = '#ef4444';
+  }
 }

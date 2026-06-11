@@ -483,6 +483,11 @@ router.put('/admin/providers/:id', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// GET /portal/admin/failover-config — get failover settings
+router.get('/admin/failover-config', requireAdmin, (req, res) => {
+  res.json(getFailoverConfig());
+});
+
 // PUT /portal/admin/failover-config — update failover settings
 router.put('/admin/failover-config', requireAdmin, (req, res) => {
   setFailoverConfig(req.body || {});

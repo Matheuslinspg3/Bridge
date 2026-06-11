@@ -66,6 +66,7 @@
       <button class="tab-btn" data-tab="tabSettings">&#9881; Configurações</button>
       <button class="tab-btn" data-tab="tabPayments">&#128179; Pagamentos</button>
       <button class="tab-btn" data-tab="tabProfit">&#128176; Lucro</button>
+      <button class="tab-btn" data-tab="tabProviders">&#9889; Provedores</button>
     </nav>
 
     <!-- ============ TAB: MAIN ============ -->
@@ -375,6 +376,27 @@
             <table class="mini"><thead><tr><th>Email</th><th>Plano</th><th>Receita R$</th><th>Input</th><th>Output</th><th>CacheW</th><th>CacheR</th><th>Custo R$</th><th>Margem R$</th><th>%</th></tr></thead>
             <tbody id="profitTable"></tbody></table>
           </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ TAB: PROVIDERS ============ -->
+    <div id="tabProviders" class="hidden">
+      <section class="grid">
+        <div class="box">
+          <h3>Failover — Config Global</h3>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+            <label style="font-size:12px">Timeout (ms)<input id="foTimeout" style="width:70px;margin-left:4px"></label>
+            <label style="font-size:12px">Cooldown (ms)<input id="foCooldown" style="width:70px;margin-left:4px"></label>
+            <button class="btn-sm" onclick="saveFailoverConfig()">Salvar</button>
+            <span id="foStatus" style="font-size:12px"></span>
+          </div>
+        </div>
+      </section>
+      <section class="grid">
+        <div class="box">
+          <h3>Provedores</h3>
+          <div id="providersList"></div>
         </div>
       </section>
     </div>
