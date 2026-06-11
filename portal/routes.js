@@ -15,7 +15,7 @@ import {
   getAsaasConfig, setAsaasConfig, getKeysMasked,
   addKey, updateKey, removeKey, findKeyById
 } from './asaas.js';
-import { getProviders, updateProvider, getFailoverConfig, setFailoverConfig, getCircuitStatus } from './providers.js';
+import { getProviders, addProvider, updateProvider, removeProvider, getFailoverConfig, setFailoverConfig, getCircuitStatus } from './providers.js';
 import { persistNow } from './config-persist.js';
 import {
   getPlans, getPlansDict, getPlanOrder,
@@ -475,9 +475,31 @@ router.get('/admin/providers', requireAdmin, (req, res) => {
   res.json({ providers, failoverConfig: getFailoverConfig(), circuitStatus: getCircuitStatus() });
 });
 
+// POST /portal/admin/providers — create new provider
+router.post('/admin/providers', requireAdmin, (req, res) => {
+  try {
+    const provider = addProvider(req.body || {});
+    persistNow();
+    res.json({ ok: true, id: provider.id, provider: { ...provider, apiKey: '****' + provider.apiKey.slice(-4) } });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // PUT /portal/admin/providers/:id — update provider
 router.put('/admin/providers/:id', requireAdmin, (req, res) => {
   const ok = updateProvider(req.params.id, req.body || {});
+  if (!ok) return res.status(404).json({ error: 'Provider not found' });
+  persistNow();
+  res.json({ ok: true });
+});
+
+// DELETE /portal/admin/providers/:id — remove provider (except principal)
+router.delete('/admin/providers/:id', requireAdmin, (req, res) => {
+  if (req.params.id === 'principal') {
+    return res.status(400).json({ error: 'Não é possível remover o provedor principal' });
+  }
+  const ok = removeProvider(req.params.id);
   if (!ok) return res.status(404).json({ error: 'Provider not found' });
   persistNow();
   res.json({ ok: true });

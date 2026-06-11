@@ -1222,6 +1222,10 @@ function renderProviders(providers) {
     html += '<textarea id="prov_models_' + p.id + '" rows="4" style="font-size:11px;font-family:monospace;padding:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text1);resize:vertical">' + JSON.stringify(p.models || [], null, 1).replace(/</g, '&lt;') + '</textarea>';
     html += '<div><button class="btn-sm" onclick="saveProvider(\'' + p.id + '\')">Salvar</button> <span id="prov_status_' + p.id + '" style="font-size:11px"></span></div>';
     html += '</div></details>';
+    // Delete button (not for principal)
+    if (p.id !== 'principal') {
+      html += '<div style="margin-top:0.5rem;text-align:right"><button class="btn-sm" style="font-size:10px;background:#ef4444;color:#fff" onclick="deleteProvider(\'' + p.id + '\')">🗑️ Remover provedor</button></div>';
+    }
     html += '</div>';
   }
   container.innerHTML = html;
@@ -1275,5 +1279,65 @@ async function saveFailoverConfig() {
     setTimeout(() => statusEl.textContent = '', 3000);
   } else {
     statusEl.textContent = '❌ Erro'; statusEl.style.color = '#ef4444';
+  }
+}
+
+
+async function createProvider() {
+  const token = getToken();
+  const label = document.getElementById('newProvLabel').value.trim();
+  const baseUrl = document.getElementById('newProvUrl').value.trim();
+  const apiKey = document.getElementById('newProvKey').value.trim();
+  const enabled = document.getElementById('newProvEnabled').checked;
+  const priority = parseInt(document.getElementById('newProvPriority').value) || undefined;
+  const statusEl = document.getElementById('newProvStatus');
+  let models = [];
+  try {
+    const raw = document.getElementById('newProvModels').value.trim();
+    if (raw) models = JSON.parse(raw);
+  } catch (e) {
+    statusEl.textContent = '❌ JSON inválido nos modelos'; statusEl.style.color = '#ef4444';
+    return;
+  }
+
+  if (!label || !baseUrl || !apiKey) {
+    statusEl.textContent = '❌ Label, URL e API Key obrigatórios'; statusEl.style.color = '#ef4444';
+    return;
+  }
+
+  const body = { label, baseUrl, apiKey, enabled, models };
+  if (priority) body.priority = priority;
+
+  const res = await fetch("/portal/admin/providers", {
+    method: "POST",
+    headers: { "x-dashboard-token": token, "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if (res.ok) {
+    statusEl.textContent = '✅ Criado: ' + data.id; statusEl.style.color = '#22c55e';
+    document.getElementById('newProvLabel').value = '';
+    document.getElementById('newProvUrl').value = '';
+    document.getElementById('newProvKey').value = '';
+    document.getElementById('newProvModels').value = '';
+    setTimeout(() => statusEl.textContent = '', 4000);
+    loadProviders();
+  } else {
+    statusEl.textContent = '❌ ' + (data.error || 'Erro'); statusEl.style.color = '#ef4444';
+  }
+}
+
+async function deleteProvider(id) {
+  if (!confirm('Remover este provedor? (irreversível)')) return;
+  const token = getToken();
+  const res = await fetch("/portal/admin/providers/" + id, {
+    method: "DELETE",
+    headers: { "x-dashboard-token": token }
+  });
+  if (res.ok) {
+    loadProviders();
+  } else {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Erro ao remover');
   }
 }
