@@ -11,6 +11,7 @@ import portalRouter, { setCostConfig, getCostConfig } from './portal/routes.js';
 import { setAsaasConfig, getAsaasConfig } from './portal/asaas.js';
 import { initPlans, getPlans, getScenarioMix, getMinMargin, getSeedVersion } from './portal/plans-store.js';
 import { registerPersist } from './portal/config-persist.js';
+import { initProviders, getProviders, getFailoverConfig, setFailoverConfig, buildFailoverChain, isCircuitOpen, recordFailure, recordSuccess, getModelCost, getCircuitStatus } from './portal/providers.js';
 import { checkPlanLimits, recordPortalUsage, setQuotaConfig, getQuotaConfig } from './portal/ratelimit.js';
 import { backfillSnapshots } from './portal/billing.js';
 import { initDB } from './portal/db.js';
@@ -143,6 +144,9 @@ initPlans(config.plans, config.scenarioMix, config.minMarginPct, config.seedVers
 // Persist seed version after migration
 if (config.seedVersion !== getSeedVersion()) { config.seedVersion = getSeedVersion(); saveConfig(config); }
 
+// Initialize providers from config (or migrate from upstreams)
+initProviders(config.providers, config.failoverConfig, config.upstreams);
+
 // Backfill plan_snapshot for existing subscriptions without one
 setTimeout(() => { try { backfillSnapshots(); } catch {} }, 2000);
 
@@ -178,6 +182,8 @@ registerPersist(() => {
   config.minMarginPct = getMinMargin();
   config.quotaConfig = getQuotaConfig();
   config.costConfig = getCostConfig();
+  config.providers = getProviders();
+  config.failoverConfig = getFailoverConfig();
   saveConfig(config);
 });
 
@@ -443,11 +449,23 @@ const recordUsage = (usage, req, meta) => {
   if (req?.portalApiKey) {
     try { recordPortalUsage(req.portalApiKey, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens); } catch {}
   }
-  // Push to detailed usage log
-  const costUsd = calcCostUsd(inputTokens, outputTokens);
+  // Push to detailed usage log (with per-model cost when available)
+  let costUsd = calcCostUsd(inputTokens, outputTokens);
+  const servedModel = meta?.servedModel || meta?.model || req?.body?.model || config.defaultModel;
+  const servedProvider = meta?.servedProvider || null;
+  // Use per-model cost from providers config if available
+  if (servedProvider && servedModel) {
+    const mc = getModelCost(servedProvider, servedModel);
+    if (mc) {
+      // mc is in ¥/M tokens; convert to USD (approximate: ¥ to BRL * BRL to USD)
+      // Store as cost_yuan for precision in profit calc
+    }
+  }
   pushUsageLog({
     keyName: req?.apiKeyName || 'unknown',
     model: meta?.model || req?.body?.model || config.defaultModel || '—',
+    servedModel: servedModel || '—',
+    servedProvider: servedProvider || '—',
     route: meta?.route || '—',
     upstream: meta?.upstream || '—',
     tokensIn: inputTokens,
@@ -1654,21 +1672,110 @@ function injectAutoCache(body) {
 }
 
 // POST /v1/messages (proxy auth)
+// POST /v1/messages (proxy auth + multi-provider failover)
 app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res) => {
   const guard = preflightGuardrails(req.body, "/v1/messages");
   if (guard.blocked) {
     return res.status(guard.status).json({ error: { message: guard.reason, type: "guardrail_block" } });
   }
+
+  const reqModel = req.body.model || config.defaultModel;
+  const chain = buildFailoverChain(reqModel);
   const upstreams = getEnabledUpstreams();
-  if (!upstreams.length) return res.status(503).json({ error: { message: "No upstreams available" } });
+  const _usageStart = Date.now();
+
+  if (!chain.length && !upstreams.length) {
+    return res.status(503).json({ error: { message: "No upstreams available" } });
+  }
+
   const isStream = req.body.stream === true;
   const forceNonStream = config.openclawForceNonStreamRetry === true && isStream;
   const rawBody = forceNonStream ? { ...req.body, stream: false } : { ...req.body };
-  // ── Auto-cache injection (Anthropic prompt caching) ──
   injectAutoCache(rawBody);
+
+  // ── Failover chain (providers with model tiers) ──
+  if (chain.length > 0) {
+    const failoverTimeout = getFailoverConfig().timeoutMs || 30000;
+    let lastError = null;
+
+    for (const { provider, model } of chain) {
+      if (isCircuitOpen(provider.id, model.name)) continue;
+
+      const targetUrl = provider.baseUrl + '/v1/messages';
+      const body = { ...rawBody, model: model.name };
+
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), failoverTimeout);
+
+        const upRes = await fetch(targetUrl, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'anthropic-version': '2023-06-01',
+            'x-api-key': provider.apiKey,
+            'Authorization': 'Bearer ' + provider.apiKey,
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+
+        // Upstream 429 or 5xx = failover trigger
+        if (upRes.status === 429 || upRes.status >= 500) {
+          recordFailure(provider.id, model.name);
+          lastError = { status: upRes.status, provider: provider.id, model: model.name };
+          continue;
+        }
+
+        // Client-facing 4xx (not 429) = definitive, don't failover
+        if (!upRes.ok && upRes.status >= 400 && upRes.status < 500) {
+          const errBody = await upRes.text().catch(() => '');
+          touchApiKey(req.apiKeyObj, true);
+          return res.status(upRes.status).json({ error: { message: errBody } });
+        }
+
+        // Success
+        recordSuccess(provider.id, model.name);
+        touchApiKey(req.apiKeyObj, false);
+        res.setHeader('x-bridge-served-model', model.name);
+        res.setHeader('x-bridge-provider', provider.id);
+        if (model.name !== reqModel) {
+          res.setHeader('x-bridge-fallback', 'true');
+          res.setHeader('x-bridge-requested-model', reqModel);
+        }
+
+        if (isStream && !forceNonStream) {
+          copyAnthropicHeaders(upRes, res);
+          await sendUpstreamResponse(upRes, res);
+        } else if (forceNonStream && isStream) {
+          const data = await upRes.json();
+          recordUsage(data.usage, req, { model: model.name, route: '/v1/messages', upstream: provider.label, servedModel: model.name, servedProvider: provider.id, durationMs: Date.now() - _usageStart, ok: true, requestId: data.id || null });
+          detectModelSwap(reqModel, data.model, '/v1/messages');
+          await sendAnthropicStreamFromMessage(data, res);
+        } else {
+          const data = await upRes.json();
+          recordUsage(data.usage, req, { model: model.name, route: '/v1/messages', upstream: provider.label, servedModel: model.name, servedProvider: provider.id, durationMs: Date.now() - _usageStart, ok: true, requestId: data.id || null });
+          detectModelSwap(reqModel, data.model, '/v1/messages');
+          copyAnthropicHeaders(upRes, res);
+          res.json(data);
+        }
+        return;
+      } catch (err) {
+        recordFailure(provider.id, model.name);
+        lastError = { status: 0, error: err.message, provider: provider.id, model: model.name };
+        continue;
+      }
+    }
+
+    // All chain exhausted
+    touchApiKey(req.apiKeyObj, true);
+    pushUsageLog({ keyName: req.apiKeyName || 'unknown', model: reqModel, route: '/v1/messages', upstream: 'all-failed', tokensIn: 0, tokensOut: 0, costUsd: 0, durationMs: Date.now() - _usageStart, ok: false, requestId: null });
+    return res.status(503).json({ error: { message: 'Todos os provedores indispon\u00edveis no momento', lastError } });
+  }
+
+  // ── Legacy path: fetchUpstream ──
   const body = rawBody;
-  const reqModel = req.body.model || config.defaultModel;
-  const _usageStart = Date.now();
   try {
     const upstreamRes = await fetchUpstream(
       "/v1/messages",
@@ -1678,35 +1785,21 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
     if (!upstreamRes.ok) {
       const errBody = await upstreamRes.text().catch(() => "");
       touchApiKey(req.apiKeyObj, true);
-      pushUsageLog({ keyName: req.apiKeyName || 'unknown', model: reqModel, route: '/v1/messages', upstream: (upstreams[0]||{}).name || '\u2014', tokensIn: 0, tokensOut: 0, costUsd: 0, durationMs: Date.now() - _usageStart, ok: false, requestId: parseUpstreamRequestId(errBody) });
       return res.status(upstreamRes.status).json({ error: { message: errBody } });
     }
     touchApiKey(req.apiKeyObj, false);
-    // Cross-vendor fallback headers
-    if (upstreamRes._isFallback) {
-      res.setHeader("x-bridge-fallback", "true");
-      res.setHeader("x-bridge-fallback-model", upstreamRes.headers?.get?.("x-bridge-fallback-model") || "unknown");
-    }
     if (isStream && !forceNonStream) {
       copyAnthropicHeaders(upstreamRes, res);
       await sendUpstreamResponse(upstreamRes, res);
-    } else if (forceNonStream && isStream) {
-      const data = await upstreamRes.json();
-      const _upName = (upstreams[0]||{}).name || '\u2014';
-      recordUsage(data.usage, req, { model: reqModel, route: '/v1/messages', upstream: _upName, durationMs: Date.now() - _usageStart, ok: true, requestId: data.id || null });
-      detectModelSwap(reqModel, data.model, "/v1/messages");
-      await sendAnthropicStreamFromMessage(data, res);
     } else {
       const data = await upstreamRes.json();
-      const _upName = (upstreams[0]||{}).name || '\u2014';
-      recordUsage(data.usage, req, { model: reqModel, route: '/v1/messages', upstream: _upName, durationMs: Date.now() - _usageStart, ok: true, requestId: data.id || null });
+      recordUsage(data.usage, req, { model: reqModel, route: '/v1/messages', upstream: (upstreams[0]||{}).name || '\u2014', durationMs: Date.now() - _usageStart, ok: true, requestId: data.id || null });
       detectModelSwap(reqModel, data.model, "/v1/messages");
       copyAnthropicHeaders(upstreamRes, res);
       res.json(data);
     }
   } catch (err) {
     touchApiKey(req.apiKeyObj, true);
-    pushUsageLog({ keyName: req.apiKeyName || 'unknown', model: reqModel, route: '/v1/messages', upstream: '\u2014', tokensIn: 0, tokensOut: 0, costUsd: 0, durationMs: Date.now() - _usageStart, ok: false, requestId: null });
     res.status(502).json({ error: { message: err.message } });
   }
 });
