@@ -12,7 +12,8 @@ import { setAsaasConfig, getAsaasConfig } from './portal/asaas.js';
 import { initPlans, getPlans, getScenarioMix, getMinMargin, getSeedVersion } from './portal/plans-store.js';
 import { registerPersist } from './portal/config-persist.js';
 import { initProviders, getProviders, getFailoverConfig, setFailoverConfig, buildFailoverChain, isCircuitOpen, recordFailure, recordSuccess, getModelCost, getCircuitStatus } from './portal/providers.js';
-import { checkPlanLimits, recordPortalUsage, setQuotaConfig, getQuotaConfig } from './portal/ratelimit.js';
+import { checkPlanLimits, recordPortalUsage, setQuotaConfig, getQuotaConfig, getMonthlySpendBrl } from './portal/ratelimit.js';
+import { estimateBrl } from './portal/cost-config.js';
 import { backfillSnapshots } from './portal/billing.js';
 import { initDB } from './portal/db.js';
 
@@ -224,11 +225,84 @@ const touchApiKey = (keyObj, isError) => {
   keyObj.lastUsed = new Date().toISOString();
 };
 
+// Reseta contadores de uso da admin key quando o período mensal virou.
+// limitPeriod === "total" nunca reseta. Mutação idempotente.
+const resetKeyPeriodIfNeeded = (keyObj) => {
+  if (!keyObj) return;
+  if ((keyObj.limitPeriod || "monthly") !== "monthly") return;
+  const start = keyObj.usagePeriodStart ? new Date(keyObj.usagePeriodStart) : null;
+  const now = new Date();
+  const sameMonth = start &&
+    start.getUTCFullYear() === now.getUTCFullYear() &&
+    start.getUTCMonth() === now.getUTCMonth();
+  if (!sameMonth) {
+    keyObj.usageTokens = 0;
+    keyObj.usageBrl = 0;
+    keyObj.usagePeriodStart = now.toISOString();
+  }
+};
+
+// Resolve a allowlist de modelos efetiva para a request (admin ou portal key).
+// Retorna [] quando não há restrição (libera todos).
+const resolveAllowedModels = (req) => {
+  if (req.apiKeyObj?.portalKey) {
+    return Array.isArray(req.apiKeyObj?.plan?.allowedModels) ? req.apiKeyObj.plan.allowedModels : [];
+  }
+  return Array.isArray(req.apiKeyObj?.allowedModels) ? req.apiKeyObj.allowedModels : [];
+};
+
+// Aplica a política da key ANTES de montar o failover chain.
+// Retorna { blocked, status, body } — status/body preenchidos quando bloqueado.
+const enforceKeyPolicy = (req) => {
+  const reqModel = req.body?.model || config.defaultModel;
+  const allowed = resolveAllowedModels(req);
+  req._allowedModels = allowed;
+
+  // 1. Allowlist de modelos → 403
+  if (allowed.length > 0 && reqModel && !allowed.includes(reqModel)) {
+    return {
+      blocked: true,
+      status: 403,
+      body: { type: "error", error: { type: "permission_error", message: `Model '${reqModel}' is not permitted for this API key. Allowed: ${allowed.join(", ")}.` } },
+    };
+  }
+
+  // 2/3. Caps (só admin keys; portal keys já passam por checkPlanLimits no checkAuth)
+  const k = req.apiKeyObj;
+  if (k && !k.portalKey) {
+    resetKeyPeriodIfNeeded(k);
+
+    // Projeção do custo de SAÍDA desta request (max_tokens é conhecido a priori).
+    // Bloqueio preventivo: torna o cap "hard" no lado caro (output = 75¥ no opus).
+    // NÃO projeta input — o input é contado com precisão depois, e projetá-lo
+    // penalizaria os PDFs grandes do app imobiliário. O overshoot residual fica
+    // limitado ao custo de input de UMA request (o componente barato).
+    const maxOut = Number(req.body?.max_tokens || req.body?.maxTokens || 0) || 0;
+    const projectedBrl = maxOut > 0
+      ? estimateBrl({ servedProvider: null, servedModel: reqModel, outputTokens: maxOut })
+      : 0;
+
+    if (k.limitTokens != null) {
+      const projTokens = (k.usageTokens || 0) + maxOut;
+      if ((k.usageTokens || 0) >= Number(k.limitTokens) || projTokens > Number(k.limitTokens)) {
+        return { blocked: true, status: 429, body: { type: "error", error: { type: "rate_limit_error", message: `Token cap reached for this API key (${k.limitTokens}). Aguarde o próximo ciclo.` } } };
+      }
+    }
+    if (k.limitBrl != null) {
+      const projBrl = (k.usageBrl || 0) + projectedBrl;
+      if ((k.usageBrl || 0) >= Number(k.limitBrl) || projBrl > Number(k.limitBrl)) {
+        return { blocked: true, status: 429, body: { type: "error", error: { type: "rate_limit_error", message: `Spend cap reached for this API key (R$ ${Number(k.limitBrl).toFixed(2)}).` } } };
+      }
+    }
+  }
+  return { blocked: false };
+};
+
 // ============================================================
 // 4. EXPRESS APP, PORT, DNS, STARTED_AT
 // ============================================================
 const app = express();
-app.use(express.json({ limit: "4mb" }));
+app.use(express.json({ limit: "32mb" }));
 
 const PORT = Number(process.env.PORT) || 8787;
 
@@ -443,24 +517,39 @@ const recordUsage = (usage, req, meta) => {
     grState.budget.usedUsd + estimateUsd(inputTokens, outputTokens)
   );
   grState.budget.totalUsd = round4((grState.budget.totalUsd || 0) + estimateUsd(inputTokens, outputTokens));
-  // Record portal usage if this is a portal key
   const cacheWriteTokens = usage.cache_creation_input_tokens || 0;
   const cacheReadTokens = usage.cache_read_input_tokens || 0;
-  if (req?.portalApiKey) {
-    try { recordPortalUsage(req.portalApiKey, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens); } catch {}
-  }
-  // Push to detailed usage log (with per-model cost when available)
-  let costUsd = calcCostUsd(inputTokens, outputTokens);
   const servedModel = meta?.servedModel || meta?.model || req?.body?.model || config.defaultModel;
   const servedProvider = meta?.servedProvider || null;
-  // Use per-model cost from providers config if available
-  if (servedProvider && servedModel) {
-    const mc = getModelCost(servedProvider, servedModel);
-    if (mc) {
-      // mc is in ¥/M tokens; convert to USD (approximate: ¥ to BRL * BRL to USD)
-      // Store as cost_yuan for precision in profit calc
-    }
+
+  // Estima o gasto em BRL desta requisição (¥/M por modelo × FX)
+  const brl = estimateBrl({
+    servedProvider,
+    servedModel,
+    inputTokens,
+    outputTokens,
+    cacheWrite: cacheWriteTokens,
+    cacheRead: cacheReadTokens,
+  });
+
+  // Record portal usage if this is a portal key (grava served_model/provider p/ cálculo BRL)
+  if (req?.portalApiKey) {
+    try { recordPortalUsage(req.portalApiKey, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens, servedModel, servedProvider); } catch {}
   }
+
+  // Acumula contadores na admin key (não-portal), com reset mensal
+  const k = req?.apiKeyObj;
+  if (k && !k.portalKey) {
+    try {
+      resetKeyPeriodIfNeeded(k);
+      k.usageTokens = (k.usageTokens || 0) + inputTokens + outputTokens;
+      k.usageBrl = round4((k.usageBrl || 0) + brl);
+      saveConfig(config);
+    } catch {}
+  }
+
+  // Push to detailed usage log
+  let costUsd = calcCostUsd(inputTokens, outputTokens);
   pushUsageLog({
     keyName: req?.apiKeyName || 'unknown',
     model: meta?.model || req?.body?.model || config.defaultModel || '—',
@@ -1149,17 +1238,52 @@ const copyAnthropicHeaders = (upstreamRes, res) => {
   for (const h of headers) { const v = upstreamRes.headers.get(h); if (v) res.setHeader(h, v); }
 };
 
-const sendUpstreamResponse = async (upstreamRes, res) => {
+// Repassa o stream SSE verbatim ao cliente E, em paralelo, parseia os eventos
+// Anthropic para extrair o usage real (message_start = input/cache, message_delta
+// = output final). Ao terminar, chama onUsage(usage) para contabilização.
+// Assim os caps funcionam mesmo em streaming puro (openclawForceNonStreamRetry off).
+const sendUpstreamResponse = async (upstreamRes, res, onUsage) => {
   const contentType = upstreamRes.headers.get("content-type") || "text/event-stream";
   res.setHeader("Content-Type", contentType);
   const reader = upstreamRes.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let usage = null;
+  const mergeUsage = (u) => {
+    if (!u) return;
+    usage = usage || {};
+    // input/cache aparecem no message_start; output final no message_delta
+    if (u.input_tokens != null) usage.input_tokens = u.input_tokens;
+    if (u.output_tokens != null) usage.output_tokens = u.output_tokens;
+    if (u.cache_creation_input_tokens != null) usage.cache_creation_input_tokens = u.cache_creation_input_tokens;
+    if (u.cache_read_input_tokens != null) usage.cache_read_input_tokens = u.cache_read_input_tokens;
+  };
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       res.write(Buffer.from(value));
+      // Parse (não-destrutivo) para extrair usage
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          const evt = JSON.parse(payload);
+          if (evt.type === "message_start" && evt.message?.usage) mergeUsage(evt.message.usage);
+          else if (evt.type === "message_delta" && evt.usage) mergeUsage(evt.usage);
+        } catch { /* fragmento incompleto — ignora */ }
+      }
     }
-  } finally { reader.releaseLock(); res.end(); }
+  } finally {
+    reader.releaseLock();
+    res.end();
+    if (onUsage) { try { onUsage(usage); } catch {} }
+  }
 };
 
 // ============================================================
@@ -1477,21 +1601,36 @@ app.get("/admin/usage", checkDashboardAuth, (req, res) => {
 
 // GET /admin/keys (dashboard auth) — lista chaves com stats, valor mascarado
 app.get("/admin/keys", checkDashboardAuth, (req, res) => {
-  res.json((config.apiKeys || []).map((a) => ({
-    id: a.id,
-    name: a.name,
-    key: maskKey(a.key),
-    enabled: a.enabled !== false,
-    createdAt: a.createdAt,
-    lastUsed: a.lastUsed || null,
-    requests: a.requests || 0,
-    errors: a.errors || 0,
-  })));
+  res.json((config.apiKeys || []).map((a) => {
+    resetKeyPeriodIfNeeded(a);
+    const limitTokens = a.limitTokens != null ? a.limitTokens : null;
+    const limitBrl = a.limitBrl != null ? a.limitBrl : null;
+    return {
+      id: a.id,
+      name: a.name,
+      key: maskKey(a.key),
+      enabled: a.enabled !== false,
+      createdAt: a.createdAt,
+      lastUsed: a.lastUsed || null,
+      requests: a.requests || 0,
+      errors: a.errors || 0,
+      allowedModels: a.allowedModels || [],
+      limitTokens,
+      limitBrl,
+      limitPeriod: a.limitPeriod || "monthly",
+      usageTokens: a.usageTokens || 0,
+      usageBrl: round4(a.usageBrl || 0),
+      remainingTokens: limitTokens != null ? Math.max(0, limitTokens - (a.usageTokens || 0)) : null,
+      remainingBrl: limitBrl != null ? Math.max(0, round4(limitBrl - (a.usageBrl || 0))) : null,
+      usagePeriodStart: a.usagePeriodStart || null,
+    };
+  }));
 });
 
 // POST /admin/keys (dashboard auth) — cria nova chave, retorna valor COMPLETO uma vez
 app.post("/admin/keys", checkDashboardAuth, (req, res) => {
-  const name = String((req.body && req.body.name) || "").trim() || "Sem nome";
+  const b = req.body || {};
+  const name = String(b.name || "").trim() || "Sem nome";
   const newKey = {
     id: genId(),
     name,
@@ -1501,6 +1640,14 @@ app.post("/admin/keys", checkDashboardAuth, (req, res) => {
     lastUsed: null,
     requests: 0,
     errors: 0,
+    // Política de revenda
+    allowedModels: Array.isArray(b.allowedModels) ? b.allowedModels.map((m) => String(m).trim()).filter(Boolean) : [],
+    limitTokens: b.limitTokens != null && b.limitTokens !== "" ? Number(b.limitTokens) : null,
+    limitBrl: b.limitBrl != null && b.limitBrl !== "" ? Number(b.limitBrl) : null,
+    limitPeriod: b.limitPeriod === "total" ? "total" : "monthly",
+    usageTokens: 0,
+    usageBrl: 0,
+    usagePeriodStart: new Date().toISOString(),
   };
   if (!Array.isArray(config.apiKeys)) config.apiKeys = [];
   config.apiKeys.push(newKey);
@@ -1513,8 +1660,17 @@ app.post("/admin/keys", checkDashboardAuth, (req, res) => {
 app.patch("/admin/keys/:id", checkDashboardAuth, (req, res) => {
   const k = (config.apiKeys || []).find((a) => a.id === req.params.id);
   if (!k) return res.status(404).json({ error: "Key not found" });
-  if (req.body.enabled !== undefined) k.enabled = !!req.body.enabled;
-  if (req.body.name !== undefined) k.name = String(req.body.name).trim() || k.name;
+  const b = req.body || {};
+  if (b.enabled !== undefined) k.enabled = !!b.enabled;
+  if (b.name !== undefined) k.name = String(b.name).trim() || k.name;
+  if (b.allowedModels !== undefined) {
+    k.allowedModels = Array.isArray(b.allowedModels) ? b.allowedModels.map((m) => String(m).trim()).filter(Boolean) : [];
+  }
+  if (b.limitTokens !== undefined) k.limitTokens = b.limitTokens != null && b.limitTokens !== "" ? Number(b.limitTokens) : null;
+  if (b.limitBrl !== undefined) k.limitBrl = b.limitBrl != null && b.limitBrl !== "" ? Number(b.limitBrl) : null;
+  if (b.limitPeriod !== undefined) k.limitPeriod = b.limitPeriod === "total" ? "total" : "monthly";
+  // Permite zerar contadores manualmente pelo painel
+  if (b.resetUsage === true) { k.usageTokens = 0; k.usageBrl = 0; k.usagePeriodStart = new Date().toISOString(); }
   saveConfig(config);
   res.json({ ok: true });
 });
@@ -1552,6 +1708,10 @@ app.post("/v1/chat/completions", instrument("/v1/chat/completions"), checkAuth, 
   if (guard.blocked) {
     return res.status(guard.status).json({ error: { message: guard.reason, type: "guardrail_block" } });
   }
+
+  // Política da key: allowlist de modelos (403) + caps de token/BRL (429)
+  const policy = enforceKeyPolicy(req);
+  if (policy.blocked) return res.status(policy.status).json(policy.body);
 
   const upstreams = getEnabledUpstreams();
   if (!upstreams.length) return res.status(503).json({ error: { message: "No upstreams available" } });
@@ -1671,16 +1831,20 @@ function injectAutoCache(body) {
   }
 }
 
-// POST /v1/messages (proxy auth)
 // POST /v1/messages (proxy auth + multi-provider failover)
-app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res) => {
+// Handler nomeado para reutilizar no alias POST /messages (contrato do app imobiliário).
+const messagesHandler = async (req, res) => {
   const guard = preflightGuardrails(req.body, "/v1/messages");
   if (guard.blocked) {
     return res.status(guard.status).json({ error: { message: guard.reason, type: "guardrail_block" } });
   }
 
+  // Política da key: allowlist de modelos (403) + caps de token/BRL (429)
+  const policy = enforceKeyPolicy(req);
+  if (policy.blocked) return res.status(policy.status).json(policy.body);
+
   const reqModel = req.body.model || config.defaultModel;
-  const chain = buildFailoverChain(reqModel);
+  const chain = buildFailoverChain(reqModel, req._allowedModels);
   const upstreams = getEnabledUpstreams();
   const _usageStart = Date.now();
 
@@ -1747,7 +1911,10 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
 
         if (isStream && !forceNonStream) {
           copyAnthropicHeaders(upRes, res);
-          await sendUpstreamResponse(upRes, res);
+          await sendUpstreamResponse(upRes, res, (usage) => {
+            recordUsage(usage, req, { model: model.name, route: '/v1/messages', upstream: provider.label, servedModel: model.name, servedProvider: provider.id, durationMs: Date.now() - _usageStart, ok: true });
+            detectModelSwap(reqModel, model.name, '/v1/messages');
+          });
         } else if (forceNonStream && isStream) {
           const data = await upRes.json();
           recordUsage(data.usage, req, { model: model.name, route: '/v1/messages', upstream: provider.label, servedModel: model.name, servedProvider: provider.id, durationMs: Date.now() - _usageStart, ok: true, requestId: data.id || null });
@@ -1795,7 +1962,9 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
     res.setHeader('x-bridge-fallback', 'false');
     if (isStream && !forceNonStream) {
       copyAnthropicHeaders(upstreamRes, res);
-      await sendUpstreamResponse(upstreamRes, res);
+      await sendUpstreamResponse(upstreamRes, res, (usage) => {
+        recordUsage(usage, req, { model: reqModel, route: '/v1/messages', upstream: (upstreams[0]||{}).name || '—', durationMs: Date.now() - _usageStart, ok: true });
+      });
     } else {
       const data = await upstreamRes.json();
       // Update served-model from actual response if available
@@ -1809,7 +1978,11 @@ app.post("/v1/messages", instrument("/v1/messages"), checkAuth, async (req, res)
     touchApiKey(req.apiKeyObj, true);
     res.status(502).json({ error: { message: err.message } });
   }
-});
+};
+
+// Rota canônica Anthropic + alias na raiz (contrato: POST {base_url}/messages)
+app.post("/v1/messages", instrument("/v1/messages"), checkAuth, messagesHandler);
+app.post("/messages", instrument("/messages"), checkAuth, messagesHandler);
 
 // ============================================================
 // 15. PORTAL INTEGRATION

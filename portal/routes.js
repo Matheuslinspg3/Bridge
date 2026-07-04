@@ -17,6 +17,7 @@ import {
 } from './asaas.js';
 import { getProviders, addProvider, updateProvider, removeProvider, getFailoverConfig, setFailoverConfig, getCircuitStatus } from './providers.js';
 import { persistNow } from './config-persist.js';
+import { getCostConfig as _getCostConfig } from './cost-config.js';
 import {
   getPlans, getPlansDict, getPlanOrder,
   addPlan, updatePlan, removePlan, findPlan,
@@ -288,17 +289,9 @@ router.put('/admin/quota-config', requireAdmin, (req, res) => {
 });
 
 // ── Cost config (RC prices + FX) ──
-const DEFAULT_COST_CONFIG = {
-  inputPriceYuanPerM: 1.50,
-  outputPriceYuanPerM: 7.50,
-  cacheWritePriceYuanPerM: 1.875,
-  cacheReadPriceYuanPerM: 0.15,
-  fxCnyToBrl: 0.76,
-};
-let costConfig = { ...DEFAULT_COST_CONFIG };
-
-export function setCostConfig(cfg) { if (cfg) costConfig = { ...costConfig, ...cfg }; }
-export function getCostConfig() { return { ...costConfig }; }
+// Definido em cost-config.js; re-exportado aqui para manter compatibilidade
+// com server.js (import { setCostConfig, getCostConfig } from './portal/routes.js').
+export { setCostConfig, getCostConfig } from './cost-config.js';
 
 // GET /portal/admin/cost-config
 router.get('/admin/cost-config', requireAdmin, (req, res) => {
@@ -341,7 +334,7 @@ router.get('/admin/profit', requireAdmin, (req, res) => {
     ORDER BY revenue DESC
   `);
 
-  const { inputPriceYuanPerM, outputPriceYuanPerM, cacheWritePriceYuanPerM, cacheReadPriceYuanPerM, fxCnyToBrl } = costConfig;
+  const { inputPriceYuanPerM, outputPriceYuanPerM, cacheWritePriceYuanPerM, cacheReadPriceYuanPerM, fxCnyToBrl } = _getCostConfig();
 
   let totalRevenue = 0, totalCost = 0, accountsInRed = 0;
 
@@ -378,7 +371,7 @@ router.get('/admin/profit', requireAdmin, (req, res) => {
       net_profit_brl: Math.round((totalRevenue - totalCost) * 100) / 100,
       accounts_in_red: accountsInRed,
     },
-    cost_config: costConfig,
+    cost_config: _getCostConfig(),
   });
 });
 

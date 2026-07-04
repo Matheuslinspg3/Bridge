@@ -1,5 +1,6 @@
 import { queryOne, queryAll, run } from './db.js';
 import { PLANS, getActiveSubscription, getTopupsThisMonth } from './billing.js';
+import { estimateBrl } from './cost-config.js';
 
 // ── Config defaults (overridable via config.json quotaConfig) ──
 let quotaConfig = {
@@ -58,6 +59,35 @@ function getMonthlyUsage(apiKey) {
     [apiKey, monthStart]
   );
   return row?.total || 0;
+}
+
+// Estima o gasto em BRL deste mês para uma api_key, agrupando por modelo
+// servido (served_model/served_provider) e aplicando estimateBrl (¥→BRL).
+// Linhas sem served_model usam o preço flat do cost-config (fallback).
+function getMonthlySpendBrl(apiKey) {
+  const monthStart = getMonthStartUTC();
+  const rows = queryAll(
+    `SELECT served_model, served_provider,
+            COALESCE(SUM(tokens_input), 0) as tin,
+            COALESCE(SUM(tokens_output), 0) as tout,
+            COALESCE(SUM(tokens_cache_write), 0) as tcw,
+            COALESCE(SUM(tokens_cache_read), 0) as tcr
+     FROM usage_log WHERE api_key = ? AND logged_at >= ?
+     GROUP BY served_model, served_provider`,
+    [apiKey, monthStart]
+  );
+  let total = 0;
+  for (const r of rows) {
+    total += estimateBrl({
+      servedProvider: r.served_provider || null,
+      servedModel: r.served_model || null,
+      inputTokens: r.tin || 0,
+      outputTokens: r.tout || 0,
+      cacheWrite: r.tcw || 0,
+      cacheRead: r.tcr || 0,
+    });
+  }
+  return total;
 }
 
 // ── Weekly bucket calculation ──
@@ -181,7 +211,8 @@ export function checkPlanLimits(apiKey, body) {
   const sub = getActiveSubscription(apiKey);
   if (!sub) return { blocked: false };
 
-  const plan = PLANS[sub.plan_id];
+  // Resolve o plano via snapshot (termos contratados) — inclui allowedModels/maxSpendBrl
+  const plan = getPlanFromSnapshot(sub);
   if (!plan) return { blocked: false };
 
   // 1. Compute effective quota for current week
@@ -222,20 +253,34 @@ export function checkPlanLimits(apiKey, body) {
     return { blocked: true, reason: `Cota mensal esgotada (${plan.name}). Compre um pacote extra ou aguarde o próximo ciclo.` };
   }
 
+  // 7. Cap de gasto em BRL (estimado) neste ciclo mensal.
+  // Bloqueio preventivo: projeta o custo de saída do max_tokens (já clampado
+  // ao plano no passo 4) para não estourar o teto no componente caro (output).
+  if (plan.maxSpendBrl != null && Number(plan.maxSpendBrl) > 0) {
+    const spendBrl = getMonthlySpendBrl(apiKey);
+    const maxOut = Number(body?.max_tokens || body?.maxTokens || 0) || 0;
+    const projected = maxOut > 0
+      ? estimateBrl({ servedProvider: null, servedModel: body?.model || null, outputTokens: maxOut })
+      : 0;
+    if (spendBrl >= Number(plan.maxSpendBrl) || (spendBrl + projected) > Number(plan.maxSpendBrl)) {
+      return { blocked: true, reason: `Limite de gasto (R$ ${Number(plan.maxSpendBrl).toFixed(2)}) atingido neste ciclo (${plan.name}).` };
+    }
+  }
+
   return { blocked: false, plan, sub };
 }
 
 /**
  * Record token usage (input, output, cache_write, cache_read).
  */
-export function recordPortalUsage(apiKey, tokensInput, tokensOutput, tokensCacheWrite, tokensCacheRead) {
+export function recordPortalUsage(apiKey, tokensInput, tokensOutput, tokensCacheWrite, tokensCacheRead, servedModel, servedProvider) {
   if (!apiKey) return;
   const sub = getActiveSubscription(apiKey);
   if (!sub) return;
   run(
-    `INSERT INTO usage_log (api_key, tokens_input, tokens_output, tokens_cache_write, tokens_cache_read, logged_at) VALUES (?, ?, ?, ?, ?, datetime('now'))`,
-    [apiKey, tokensInput || 0, tokensOutput || 0, tokensCacheWrite || 0, tokensCacheRead || 0]
+    `INSERT INTO usage_log (api_key, tokens_input, tokens_output, tokens_cache_write, tokens_cache_read, served_model, served_provider, logged_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+    [apiKey, tokensInput || 0, tokensOutput || 0, tokensCacheWrite || 0, tokensCacheRead || 0, servedModel || null, servedProvider || null]
   );
 }
 
-export { getDailyUsage, getMonthlyUsage, computeEffectiveQuota };
+export { getDailyUsage, getMonthlyUsage, getMonthlySpendBrl, computeEffectiveQuota };

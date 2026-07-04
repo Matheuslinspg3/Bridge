@@ -167,6 +167,8 @@ export function confirmOrder(orderId) {
   const snapshot = plan ? JSON.stringify({
     tokensMonth: plan.tokensMonth, rpm: plan.rpm,
     maxTokensReq: plan.maxTokensReq, price: plan.price, name: plan.name,
+    allowedModels: Array.isArray(plan.allowedModels) ? plan.allowedModels : [],
+    maxSpendBrl: plan.maxSpendBrl != null ? plan.maxSpendBrl : null,
   }) : null;
   run(
     `INSERT INTO subscriptions (user_id, plan_id, api_key, starts_at, expires_at, active, plan_snapshot) VALUES (?, ?, ?, datetime('now'), ?, 1, ?)`,
@@ -240,6 +242,8 @@ export function backfillSnapshots() {
         const snapshot = JSON.stringify({
           tokensMonth: plan.tokensMonth, rpm: plan.rpm,
           maxTokensReq: plan.maxTokensReq, price: plan.price, name: plan.name,
+          allowedModels: Array.isArray(plan.allowedModels) ? plan.allowedModels : [],
+          maxSpendBrl: plan.maxSpendBrl != null ? plan.maxSpendBrl : null,
         });
         run(`UPDATE subscriptions SET plan_snapshot = ? WHERE id = ?`, [snapshot, sub.id]);
       }

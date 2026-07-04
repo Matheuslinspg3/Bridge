@@ -655,28 +655,49 @@ async function refreshKeys() {
   } catch(e) { console.error("[detail-errors]", e); }
 }
 
+let _lastKeys = [];
 function renderKeysList(keys) {
+  _lastKeys = keys || [];
   const el = $("#keysList");
   if (!keys.length) {
     el.innerHTML = '<p class="muted small center">Nenhuma chave criada. Use a senha master ou crie chaves para rastrear uso.</p>';
     return;
   }
-  el.innerHTML = keys.map(k => `
+  const bar = (used, limit) => {
+    if (limit == null) return '<span class="muted small">sem limite</span>';
+    const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+    const color = pct >= 100 ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#22c55e';
+    return `<div style="background:#1f2937;border-radius:4px;height:6px;overflow:hidden;margin:2px 0"><div style="width:${pct}%;height:100%;background:${color}"></div></div>`;
+  };
+  el.innerHTML = keys.map(k => {
+    const models = (k.allowedModels && k.allowedModels.length) ? k.allowedModels.map(m => `<code class="small">${escHtml(m)}</code>`).join(' ') : '<span class="muted small">todos os modelos</span>';
+    const tokLine = k.limitTokens != null
+      ? `Tokens: ${fmt(k.usageTokens || 0)} / ${fmt(k.limitTokens)} ${bar(k.usageTokens || 0, k.limitTokens)}`
+      : `Tokens: ${fmt(k.usageTokens || 0)} <span class="muted small">(sem limite)</span>`;
+    const brlLine = k.limitBrl != null
+      ? `Gasto: R$ ${(k.usageBrl || 0).toFixed(2)} / R$ ${k.limitBrl.toFixed(2)} ${bar(k.usageBrl || 0, k.limitBrl)}`
+      : `Gasto: R$ ${(k.usageBrl || 0).toFixed(2)} <span class="muted small">(sem limite)</span>`;
+    return `
     <div class="key-item">
       <div class="key-item-info">
         <span class="key-item-name">${escHtml(k.name)}</span>
         <code class="key-item-value">${escHtml(k.key)}</code>
-        <span class="muted small">${k.enabled ? '✓ ativa' : '✗ desabilitada'}</span>
+        <span class="muted small">${k.enabled ? '✓ ativa' : '✗ desabilitada'} · ${k.limitPeriod === 'total' ? 'total' : 'mensal'}</span>
       </div>
+      <div class="muted small" style="margin:4px 0">Modelos: ${models}</div>
+      <div class="small" style="margin:4px 0">${tokLine}</div>
+      <div class="small" style="margin:4px 0">${brlLine}</div>
       <div class="key-item-stats muted small">
         <span>${k.requests} reqs</span> · <span class="bad">${k.errors} erros</span> · <span>último uso: ${k.lastUsed ? humanDate(k.lastUsed) : '—'}</span>
       </div>
       <div class="key-item-actions">
+        <button class="btn-sm" onclick="editKey('${k.id}')">Editar limites</button>
         <button class="btn-sm" onclick="toggleKey('${k.id}',${!k.enabled})">${k.enabled ? 'Desabilitar' : 'Habilitar'}</button>
         <button class="btn-sm danger" onclick="revokeKey('${k.id}')">Revogar</button>
       </div>
     </div>
-  `).join("");
+  `;
+  }).join("");
 }
 
 function renderDetailErrors(errors) {
@@ -723,21 +744,61 @@ window.revokeKey = async (id) => {
   refreshKeys();
 };
 
+const parseModels = (raw) => (raw || "").split(",").map(s => s.trim()).filter(Boolean);
+const numOrNull = (v) => (v === "" || v == null) ? null : Number(v);
+
 $("#createKeyBtn").addEventListener("click", async () => {
-  const name = prompt("Nome da chave (ex: n8n-prod, cursor-matheus):");
-  if (!name) return;
+  const status = $("#createKeyStatus");
+  const name = $("#newKeyName").value.trim();
+  if (!name) { status.textContent = "❌ Informe um nome"; status.style.color = "#ef4444"; return; }
+  const body = {
+    name,
+    allowedModels: parseModels($("#newKeyModels").value),
+    limitTokens: numOrNull($("#newKeyLimitTokens").value),
+    limitBrl: numOrNull($("#newKeyLimitBrl").value),
+    limitPeriod: $("#newKeyPeriod").value,
+  };
   const r = await fetch("/admin/keys", {
     method: "POST",
     headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ name })
+    body: JSON.stringify(body)
   });
   const data = await r.json();
   if (data.key) {
     $("#newKeyValue").textContent = data.key;
     $("#newKeyResult").classList.remove("hidden");
+    status.textContent = "✅ Criada"; status.style.color = "#22c55e";
+    $("#newKeyName").value = ""; $("#newKeyModels").value = "";
+    $("#newKeyLimitTokens").value = ""; $("#newKeyLimitBrl").value = "";
+  } else {
+    status.textContent = "❌ " + (data.error || "Erro"); status.style.color = "#ef4444";
   }
   refreshKeys();
 });
+
+window.editKey = async (id) => {
+  const k = (_lastKeys || []).find(x => x.id === id);
+  if (!k) return;
+  const models = prompt("Modelos permitidos (vírgula; vazio = todos):", (k.allowedModels || []).join(", "));
+  if (models === null) return;
+  const limitTokens = prompt("Limite de tokens (vazio = sem limite):", k.limitTokens != null ? k.limitTokens : "");
+  if (limitTokens === null) return;
+  const limitBrl = prompt("Limite de gasto R$ (vazio = sem limite):", k.limitBrl != null ? k.limitBrl : "");
+  if (limitBrl === null) return;
+  const limitPeriod = prompt("Período (monthly ou total):", k.limitPeriod || "monthly");
+  if (limitPeriod === null) return;
+  await fetch(`/admin/keys/${id}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${getToken()}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      allowedModels: parseModels(models),
+      limitTokens: numOrNull(limitTokens),
+      limitBrl: numOrNull(limitBrl),
+      limitPeriod: limitPeriod === "total" ? "total" : "monthly",
+    })
+  });
+  refreshKeys();
+};
 
 /* ---- Usage Tab ---- */
 async function refreshUsage() {

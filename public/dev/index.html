@@ -177,9 +177,19 @@
       <div class="card">
         <div class="card-header-row">
           <h3>Chaves de API</h3>
-          <button id="createKeyBtn" class="btn-sm">+ Nova chave</button>
         </div>
-        <p class="muted small">Crie chaves para rastrear uso por cliente/app. Cada chave funciona como Bearer token para chamar o bridge.</p>
+        <p class="muted small">Crie chaves para clientes/apps. Cada chave funciona como Bearer token. Restrinja modelos e limite o uso por reais (R$) ou tokens.</p>
+        <div style="margin:10px 0;padding:12px;background:#0c1322;border:1px solid var(--border);border-radius:8px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <label class="small">Nome<br><input id="newKeyName" type="text" placeholder="ex: app-imobiliario" style="width:100%"></label>
+            <label class="small">Modelos permitidos (vírgula; vazio = todos)<br><input id="newKeyModels" type="text" placeholder="claude-opus-4-8, claude-sonnet-4-6" style="width:100%"></label>
+            <label class="small">Limite de tokens (vazio = sem limite)<br><input id="newKeyLimitTokens" type="number" min="0" placeholder="ex: 50000000" style="width:100%"></label>
+            <label class="small">Limite de gasto R$ (vazio = sem limite)<br><input id="newKeyLimitBrl" type="number" min="0" step="0.01" placeholder="ex: 50.00" style="width:100%"></label>
+            <label class="small">Período do limite<br><select id="newKeyPeriod" style="width:100%"><option value="monthly">Mensal (reseta todo mês)</option><option value="total">Total (não reseta)</option></select></label>
+          </div>
+          <button id="createKeyBtn" class="btn-sm" style="margin-top:10px">+ Criar chave</button>
+          <span id="createKeyStatus" class="small" style="margin-left:8px"></span>
+        </div>
         <div id="keysList"></div>
         <div id="newKeyResult" class="hidden" style="margin-top:12px;padding:12px;background:#0c1322;border:1px solid var(--border);border-radius:8px">
           <p class="small" style="margin:0 0 6px"><b>Chave criada (copie agora — não será exibida novamente):</b></p>

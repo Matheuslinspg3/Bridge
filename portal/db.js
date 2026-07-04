@@ -86,6 +86,9 @@ export async function initDB() {
   // Cache columns on usage_log
   try { db.run(`ALTER TABLE usage_log ADD COLUMN tokens_cache_write INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.run(`ALTER TABLE usage_log ADD COLUMN tokens_cache_read INTEGER NOT NULL DEFAULT 0`); } catch {}
+  // Served model/provider on usage_log (para cálculo de gasto BRL por modelo)
+  try { db.run(`ALTER TABLE usage_log ADD COLUMN served_model TEXT`); } catch {}
+  try { db.run(`ALTER TABLE usage_log ADD COLUMN served_provider TEXT`); } catch {}
 
   // AbacatePay columns on orders (legacy)
   try { db.run(`ALTER TABLE orders ADD COLUMN abacate_charge_id TEXT`); } catch {}

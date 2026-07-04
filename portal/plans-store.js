@@ -126,6 +126,8 @@ export function addPlan(data) {
     rpm: Number(data.rpm) || 15,
     maxTokensReq: Number(data.maxTokensReq) || 4096,
     enabled: data.enabled !== false,
+    allowedModels: Array.isArray(data.allowedModels) ? data.allowedModels : [],
+    maxSpendBrl: data.maxSpendBrl != null ? Number(data.maxSpendBrl) : null,
   };
   plans.push(plan);
   return plan;
@@ -140,6 +142,8 @@ export function updatePlan(id, patch) {
   if (patch.rpm !== undefined) plan.rpm = Number(patch.rpm);
   if (patch.maxTokensReq !== undefined) plan.maxTokensReq = Number(patch.maxTokensReq);
   if (patch.enabled !== undefined) plan.enabled = patch.enabled;
+  if (patch.allowedModels !== undefined) plan.allowedModels = Array.isArray(patch.allowedModels) ? patch.allowedModels : [];
+  if (patch.maxSpendBrl !== undefined) plan.maxSpendBrl = patch.maxSpendBrl != null ? Number(patch.maxSpendBrl) : null;
   return plan;
 }
 
