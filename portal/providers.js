@@ -71,15 +71,21 @@ export function initProviders(configProviders, configFailover, existingUpstreams
 }
 
 // ── Build failover chain for a request ──
-// Returns ordered array of { provider, model } to try
-export function buildFailoverChain(requestedModel) {
+// Returns ordered array of { provider, model } to try.
+// allowedModels (opcional): se não-vazio, o failover NUNCA rebaixa para um
+// modelo fora da allowlist da key. Ausente/vazio = comportamento antigo (todos).
+export function buildFailoverChain(requestedModel, allowedModels) {
+  const restrict = Array.isArray(allowedModels) && allowedModels.length > 0;
+
   const enabledProviders = providers
     .filter(p => p.enabled && p.baseUrl)
     .sort((a, b) => a.priority - b.priority);
 
   const chain = [];
   for (const provider of enabledProviders) {
-    const models = [...(provider.models || [])].sort((a, b) => a.tier - b.tier);
+    let models = [...(provider.models || [])].sort((a, b) => a.tier - b.tier);
+    // Filtra para só modelos permitidos (evita downgrade silencioso proibido)
+    if (restrict) models = models.filter(m => allowedModels.includes(m.name));
     // If the requested model exists in this provider, start from it
     const startIdx = models.findIndex(m => m.name === requestedModel);
     const orderedModels = startIdx >= 0
@@ -128,6 +134,21 @@ export function getModelCost(providerId, modelName) {
   if (!provider) return null;
   const model = (provider.models || []).find(m => m.name === modelName);
   return model?.cost || null;
+}
+
+// Procura o custo de um modelo por nome em qualquer provider habilitado
+// (usado na projeção de custo antes de saber qual provider vai servir).
+// Prioriza providers de menor priority (o que provavelmente servirá).
+export function findModelCostByName(modelName) {
+  if (!modelName) return null;
+  const ordered = [...providers]
+    .filter(p => p.enabled)
+    .sort((a, b) => (a.priority || 99) - (b.priority || 99));
+  for (const p of ordered) {
+    const m = (p.models || []).find(x => x.name === modelName);
+    if (m?.cost) return m.cost;
+  }
+  return null;
 }
 
 // ── Failover status for monitoring ──

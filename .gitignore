@@ -20,3 +20,9 @@ Thumbs.db
 
 # ZIP de build
 *.zip
+
+# Estado de runtime — chaves reais de upstream + keys de clientes (NUNCA commitar)
+config.json
+*.db
+claudbridge.db
+/data/
