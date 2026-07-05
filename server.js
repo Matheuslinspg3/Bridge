@@ -303,6 +303,31 @@ const enforceKeyPolicy = (req) => {
 // ============================================================
 const app = express();
 app.use(express.json({ limit: "32mb" }));
+app.use((err, req, res, next) => {
+  if (!err) return next();
+  if (err.type === "entity.too.large" || err.status === 413) {
+    const details = {
+      route: req?.originalUrl || req?.path || null,
+      contentLength: Number(req?.headers?.["content-length"] || 0) || null,
+      maxBodyBytes: 32 * 1024 * 1024,
+    };
+    pushErrorLog({
+      type: "payload_too_large",
+      route: details.route,
+      status: 413,
+      message: `Request body exceeded the Express JSON limit (${details.maxBodyBytes} bytes).`,
+      contentLength: details.contentLength,
+    });
+    return res.status(413).json({
+      error: {
+        type: "payload_too_large",
+        message: "Request body exceeded the Bridge JSON body limit.",
+        details,
+      },
+    });
+  }
+  return next(err);
+});
 
 const PORT = Number(process.env.PORT) || 8787;
 
@@ -467,6 +492,159 @@ const parseUpstreamRequestId = (text) => {
   if (!text) return null;
   const m = String(text).match(/request[_\s-]?id[:\s"]+([a-zA-Z0-9_-]{8,})/i);
   return m ? m[1] : null;
+};
+
+const BRIDGE_ERROR_STATUS = {
+  payload_too_large: 413,
+  upstream_timeout: 504,
+  upstream_5xx: 502,
+  all_upstreams_failed: 502,
+  cross_vendor_fallback_failed: 502,
+  bridge_internal_error: 500,
+};
+
+const truncateText = (text, max = 500) => {
+  if (!text) return "";
+  const str = String(text);
+  return str.length > max ? str.slice(0, max) : str;
+};
+
+const createBridgeError = (type, message, details = {}, statusCode) => {
+  const err = new Error(message);
+  err.bridgeType = type || "bridge_internal_error";
+  err.bridgeDetails = details || {};
+  err.statusCode = statusCode || BRIDGE_ERROR_STATUS[err.bridgeType] || 500;
+  return err;
+};
+
+const attachBridgeMeta = (response, meta) => {
+  if (response && typeof response === "object") {
+    response._bridgeMeta = { ...(response._bridgeMeta || {}), ...(meta || {}) };
+  }
+  return response;
+};
+
+const deriveFinalFailureType = (failureTrail) => {
+  if (!Array.isArray(failureTrail) || failureTrail.length === 0) return "all_upstreams_failed";
+  const types = failureTrail.map((f) => f?.type).filter(Boolean);
+  if (types.length > 0 && types.every((t) => t === "upstream_timeout")) return "upstream_timeout";
+  if (types.length > 0 && types.every((t) => t === "upstream_5xx")) return "upstream_5xx";
+  return "all_upstreams_failed";
+};
+
+const getBodyByteSize = (body, fallbackBytes = null) => {
+  if (Number.isFinite(fallbackBytes) && fallbackBytes > 0) return fallbackBytes;
+  try {
+    return Buffer.byteLength(JSON.stringify(body || {}), "utf8");
+  } catch {
+    return null;
+  }
+};
+
+const collectDocumentStats = (messages) => {
+  const stats = {
+    count: 0,
+    totalBase64Chars: 0,
+    approxBytes: 0,
+    largestApproxBytes: 0,
+    mediaTypes: [],
+  };
+  const mediaTypes = new Set();
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const content = Array.isArray(message?.content) ? message.content : [];
+    for (const block of content) {
+      if (block?.type !== "document") continue;
+      stats.count++;
+      const mediaType = block?.source?.media_type || null;
+      if (mediaType && !mediaTypes.has(mediaType)) {
+        mediaTypes.add(mediaType);
+        stats.mediaTypes.push(mediaType);
+      }
+      const data = typeof block?.source?.data === "string" ? block.source.data : "";
+      const base64Chars = data.length;
+      const approxBytes = Math.floor((base64Chars * 3) / 4);
+      stats.totalBase64Chars += base64Chars;
+      stats.approxBytes += approxBytes;
+      stats.largestApproxBytes = Math.max(stats.largestApproxBytes, approxBytes);
+    }
+  }
+  return stats;
+};
+
+const buildRequestDiagnostics = (req) => {
+  const contentLength = Number(req?.headers?.["content-length"] || 0) || null;
+  const document = collectDocumentStats(req?.body?.messages);
+  return {
+    route: req?.originalUrl || req?.path || null,
+    contentLength,
+    bodyBytes: getBodyByteSize(req?.body, contentLength),
+    hasDocument: document.count > 0,
+    document,
+  };
+};
+
+const logChatCompletionsEvent = (stage, details) => {
+  try {
+    console.log(`[chat-completions] ${stage} ${JSON.stringify(details || {})}`);
+  } catch {
+    console.log(`[chat-completions] ${stage}`);
+  }
+};
+
+const setBridgeResponseHeaders = (res, meta, routePath) => {
+  if (!res || !meta) return;
+  const route = routePath || meta.route;
+  if (route) res.setHeader("x-bridge-route", route);
+  if (meta.upstreamName) res.setHeader("x-bridge-provider", meta.upstreamName);
+  if (meta.servedModel) res.setHeader("x-bridge-served-model", meta.servedModel);
+  if (meta.fallbackUsed !== undefined) res.setHeader("x-bridge-fallback", String(Boolean(meta.fallbackUsed)));
+  if (meta.fallbackVendor) res.setHeader("x-bridge-fallback-vendor", meta.fallbackVendor);
+  if (meta.fallbackModel) res.setHeader("x-bridge-fallback-model", meta.fallbackModel);
+};
+
+const buildRouteError = (err, fallbackMessage, extraDetails = {}) => {
+  const type = err?.bridgeType || err?.type || "bridge_internal_error";
+  const details = { ...(err?.bridgeDetails || {}), ...(extraDetails || {}) };
+  return {
+    type,
+    status: err?.statusCode || BRIDGE_ERROR_STATUS[type] || 500,
+    message: err?.message || fallbackMessage || "Bridge request failed",
+    details,
+  };
+};
+
+const classifyUpstreamHttpFailure = (status, bodyText, upstreamMeta, extraDetails = {}) => {
+  const details = {
+    ...(extraDetails || {}),
+    upstreamStatus: status,
+    upstreamBody: truncateText(bodyText),
+    upstreamName: upstreamMeta?.upstreamName || null,
+    fallbackUsed: Boolean(upstreamMeta?.fallbackUsed),
+    fallbackVendor: upstreamMeta?.fallbackVendor || null,
+    fallbackModel: upstreamMeta?.fallbackModel || null,
+  };
+  if (status === 413 || /payload too large|request too large|entity too large/i.test(bodyText || "")) {
+    return {
+      type: "payload_too_large",
+      status: 413,
+      message: "Upstream rejected the request body as too large.",
+      details,
+    };
+  }
+  if (status >= 500) {
+    return {
+      type: "upstream_5xx",
+      status: 502,
+      message: `Anthropic-compatible upstream returned HTTP ${status}.`,
+      details,
+    };
+  }
+  return {
+    type: "bridge_internal_error",
+    status,
+    message: truncateText(bodyText) || `Upstream rejected the request with HTTP ${status}.`,
+    details,
+  };
 };
 
 const preflightGuardrails = (body, route) => {
@@ -747,52 +925,76 @@ const convertOpenAIResponseToAnthropic = (openaiData, originalModel) => {
 
 const fetchUpstream = async (url, options, reqCtx) => {
   const allUpstreams = reqCtx.upstreams || [];
-  if (!allUpstreams.length) throw new Error("No upstreams configured");
+  if (!allUpstreams.length) {
+    throw createBridgeError("all_upstreams_failed", "No upstreams configured", {
+      route: reqCtx.route || null,
+      requestVendor: reqCtx.requestVendor || "anthropic",
+      providerAttempts: [],
+      failureTrail: [],
+    }, 503);
+  }
 
   const retryCfg = config.retry;
   const circuitCfg = config.circuit;
   const timeoutMs = config.concurrency.timeoutMs || 180000;
   const infinite = retryCfg.infinite !== false;
   const maxAttempts = infinite ? Infinity : (retryCfg.attempts || 5);
-
-  // --- Priority + Sticky routing ---
-  // Filter to same-vendor upstreams first (anthropic for /v1/messages)
   const requestVendor = reqCtx.requestVendor || "anthropic";
+  const disableCrossVendorFallback = reqCtx.disableCrossVendorFallback === true;
+  const providerAttempts = [];
+  const failureTrail = [];
+  const fallbackTrail = [];
+
   const sameVendor = sortByPriority(
     allUpstreams.filter((u) => (u.vendor || "anthropic") === requestVendor)
   );
   const healthySameVendor = sameVendor.filter((u) => getHealthState(u.id).healthy);
 
-  // Sticky: hash user to a preferred upstream
   const userId = reqCtx.userId || reqCtx.apiKeyName || null;
   const stickyTarget = pickStickyUpstream(
     healthySameVendor.length > 0 ? healthySameVendor : sameVendor,
     userId
   );
 
-  // Build ordered attempt list: sticky first, then rest by priority
   const orderedUpstreams = [stickyTarget, ...sameVendor.filter((u) => u.id !== stickyTarget?.id)];
+
+  const annotateResponse = (response, meta = {}) => attachBridgeMeta(response, {
+    route: reqCtx.route || null,
+    requestVendor,
+    providerAttempts,
+    failureTrail,
+    fallbackUsed: false,
+    ...meta,
+  });
 
   let attempt = 0;
   let upstreamIdx = 0;
 
   while (attempt < maxAttempts) {
-    // If we've exhausted same-vendor upstreams, break to cross-vendor fallback
     if (upstreamIdx >= orderedUpstreams.length && attempt > 0) break;
 
     const upstream = orderedUpstreams[upstreamIdx % orderedUpstreams.length];
     if (!upstream) break;
     const stat = getUpstreamStat(upstream.id);
     const hs = getHealthState(upstream.id);
+    const attemptInfo = {
+      upstreamId: upstream.id,
+      upstreamName: upstream.name || upstream.id,
+      vendor: upstream.vendor || requestVendor,
+      targetUrl: upstream.baseUrl + url,
+      attempt: attempt + 1,
+      phase: "primary",
+    };
+    providerAttempts.push(attemptInfo);
 
-    // Skip unhealthy on first pass (allow on last resort)
     if (!hs.healthy && upstreamIdx < orderedUpstreams.length - 1 && attempt < 3) {
+      attemptInfo.skipped = "unhealthy";
       upstreamIdx++;
       continue;
     }
 
-    // Circuit breaker check
     if (bridgeState.circuitUntil > Date.now()) {
+      attemptInfo.skipped = "circuit_open";
       metrics.circuitOpenedCount++;
       metrics.lastCircuitOpenAt = new Date().toISOString();
       pushErrorLog({
@@ -829,44 +1031,82 @@ const fetchUpstream = async (url, options, reqCtx) => {
       }
 
       if (res.ok) {
+        attemptInfo.outcome = "success";
         stat.success++;
         bridgeState.consecutiveFailures = 0;
         hs.consecutiveFailures = 0;
         hs.healthy = true;
-        return res;
+        return annotateResponse(res, {
+          upstreamId: upstream.id,
+          upstreamName: upstream.name || upstream.id,
+          servedModel: reqCtx.model || null,
+          providerAttempts,
+          failureTrail,
+        });
       }
 
       const bodyText = await res.clone().text().catch(() => "");
       const reqId = parseUpstreamRequestId(bodyText);
       const retryableByText = isRetryableText(bodyText);
+      const failureType = res.status >= 500 ? "upstream_5xx" : (res.status === 413 ? "payload_too_large" : "bridge_internal_error");
+      const failureDetails = {
+        upstreamId: upstream.id,
+        upstreamName: upstream.name || upstream.id,
+        upstreamStatus: res.status,
+        upstreamRequestId: reqId,
+        upstreamBody: truncateText(bodyText),
+        route: reqCtx.route || null,
+        model: reqCtx.model || null,
+        fallbackUsed: false,
+      };
 
       if (isDefinitiveStatus(res.status) && !retryableByText) {
+        attemptInfo.outcome = "definitive_http_error";
+        attemptInfo.status = res.status;
         stat.errors++;
         stat.lastError = `HTTP ${res.status}`;
         stat.lastErrorTs = new Date().toISOString();
         pushErrorLog({
           type: isDefinitiveText(bodyText) ? "client_error" : "upstream_error",
           upstream: upstream.name, upstreamId: upstream.id,
-          status: res.status, message: bodyText.slice(0, 500),
+          status: res.status, message: truncateText(bodyText),
           upstreamRequestId: reqId, apiKeyName: reqCtx.apiKeyName || null,
           model: reqCtx.model || null, route: reqCtx.route || null,
           attempt: attempt + 1, definitive: true,
         });
-        return res;
+        if (res.status === 413) {
+          throw createBridgeError("payload_too_large", "Upstream rejected the request body as too large.", failureDetails, 413);
+        }
+        return annotateResponse(res, {
+          upstreamId: upstream.id,
+          upstreamName: upstream.name || upstream.id,
+          servedModel: reqCtx.model || null,
+          providerAttempts,
+          failureTrail,
+        });
       }
 
-      // Retryable
+      attemptInfo.outcome = "retryable_http_error";
+      attemptInfo.status = res.status;
       stat.errors++;
       stat.lastError = `HTTP ${res.status}`;
       stat.lastErrorTs = new Date().toISOString();
       bridgeState.consecutiveFailures++;
       hs.consecutiveFailures++;
       if (hs.consecutiveFailures >= 3) hs.healthy = false;
+      failureTrail.push({
+        type: failureType,
+        upstreamId: upstream.id,
+        upstreamName: upstream.name || upstream.id,
+        status: res.status,
+        upstreamRequestId: reqId,
+        message: truncateText(bodyText),
+      });
 
       pushErrorLog({
         type: "upstream_retry",
         upstream: upstream.name, upstreamId: upstream.id,
-        status: res.status, message: bodyText.slice(0, 500),
+        status: res.status, message: truncateText(bodyText),
         upstreamRequestId: reqId, apiKeyName: reqCtx.apiKeyName || null,
         model: reqCtx.model || null, route: reqCtx.route || null,
         attempt: attempt + 1, retryReason: retryableByText ? "retryable_text" : "retryable_status",
@@ -889,7 +1129,9 @@ const fetchUpstream = async (url, options, reqCtx) => {
       );
       await sleep(delay);
     } catch (err) {
-      releaseUpstreamSlot();
+      const alreadyClassified = err?.bridgeType;
+      if (alreadyClassified) throw err;
+      attemptInfo.outcome = err?.name === "AbortError" ? "timeout" : "network_error";
       stat.errors++;
       stat.lastError = err.message;
       stat.lastErrorTs = new Date().toISOString();
@@ -898,6 +1140,14 @@ const fetchUpstream = async (url, options, reqCtx) => {
       if (hs.consecutiveFailures >= 3) hs.healthy = false;
 
       const isTimeout = err.name === "AbortError";
+      const failureType = isTimeout ? "upstream_timeout" : "bridge_internal_error";
+      failureTrail.push({
+        type: failureType,
+        upstreamId: upstream.id,
+        upstreamName: upstream.name || upstream.id,
+        status: 0,
+        message: err.message,
+      });
       pushErrorLog({
         type: isTimeout ? "timeout" : "network_error",
         upstream: upstream.name, upstreamId: upstream.id,
@@ -925,95 +1175,174 @@ const fetchUpstream = async (url, options, reqCtx) => {
     }
   }
 
-  // ── Cross-vendor emergency fallback ──
-  const crossVendorUpstreams = sortByPriority(
-    allUpstreams.filter((u) => {
-      const v = u.vendor || "anthropic";
-      return v !== requestVendor && u.enabled !== false && getHealthState(u.id).healthy;
-    })
-  );
+  if (!disableCrossVendorFallback) {
+    const crossVendorUpstreams = sortByPriority(
+      allUpstreams.filter((u) => {
+        const v = u.vendor || "anthropic";
+        return v !== requestVendor && u.enabled !== false && getHealthState(u.id).healthy;
+      })
+    );
 
-  if (crossVendorUpstreams.length > 0) {
-    const fallbackUp = crossVendorUpstreams[0];
-    const fallbackModel = fallbackUp.fallbackModel || "gpt-5.5";
-    const stat = getUpstreamStat(fallbackUp.id);
+    if (crossVendorUpstreams.length > 0) {
+      const fallbackUp = crossVendorUpstreams[0];
+      const fallbackModel = fallbackUp.fallbackModel || "gpt-5.5";
+      const stat = getUpstreamStat(fallbackUp.id);
+      const fallbackInfo = {
+        upstreamId: fallbackUp.id,
+        upstreamName: fallbackUp.name || fallbackUp.id,
+        vendor: fallbackUp.vendor || "unknown",
+        fallbackModel,
+      };
+      fallbackTrail.push(fallbackInfo);
 
-    pushErrorLog({
-      type: "cross_vendor_fallback",
-      upstream: fallbackUp.name, upstreamId: fallbackUp.id,
-      message: `All ${requestVendor} upstreams failed. Falling back to ${fallbackUp.vendor}/${fallbackModel}`,
-      apiKeyName: reqCtx.apiKeyName || null,
-      model: reqCtx.model || null, route: reqCtx.route || null,
-    });
+      pushErrorLog({
+        type: "cross_vendor_fallback",
+        upstream: fallbackUp.name, upstreamId: fallbackUp.id,
+        message: `All ${requestVendor} upstreams failed. Falling back to ${fallbackUp.vendor}/${fallbackModel}`,
+        apiKeyName: reqCtx.apiKeyName || null,
+        model: reqCtx.model || null, route: reqCtx.route || null,
+      });
 
-    // Convert request format if going from Anthropic → OpenAI
-    let fallbackUrl = url;
-    let fallbackOptions = { ...options };
-    const originalBody = JSON.parse(options.body || "{}");
+      let fallbackUrl = url;
+      let fallbackOptions = { ...options };
+      const originalBody = JSON.parse(options.body || "{}");
 
-    if (requestVendor === "anthropic" && (fallbackUp.vendor === "openai")) {
-      fallbackUrl = "/v1/chat/completions";
-      const openaiBody = convertAnthropicRequestToOpenAI(originalBody, fallbackModel);
-      fallbackOptions.body = JSON.stringify(openaiBody);
-      fallbackOptions.headers = { ...fallbackOptions.headers, "content-type": "application/json" };
-      delete fallbackOptions.headers["anthropic-version"];
-    }
+      if (requestVendor === "anthropic" && (fallbackUp.vendor === "openai")) {
+        fallbackUrl = "/v1/chat/completions";
+        const openaiBody = convertAnthropicRequestToOpenAI(originalBody, fallbackModel);
+        fallbackOptions.body = JSON.stringify(openaiBody);
+        fallbackOptions.headers = { ...fallbackOptions.headers, "content-type": "application/json" };
+        delete fallbackOptions.headers["anthropic-version"];
+      }
 
-    const targetUrl = fallbackUp.baseUrl + fallbackUrl;
-    const apiKey = (fallbackUp.apiKey || "").trim();
-    const headers = {
-      ...fallbackOptions.headers,
-      "x-api-key": apiKey,
-      Authorization: `Bearer ${apiKey}`,
-    };
+      const targetUrl = fallbackUp.baseUrl + fallbackUrl;
+      const apiKey = (fallbackUp.apiKey || "").trim();
+      const headers = {
+        ...fallbackOptions.headers,
+        "x-api-key": apiKey,
+        Authorization: `Bearer ${apiKey}`,
+      };
 
-    stat.requests++;
-    stat.lastUsed = new Date().toISOString();
+      stat.requests++;
+      stat.lastUsed = new Date().toISOString();
 
-    try {
-      await acquireUpstreamSlot();
-      let res;
       try {
-        res = await fetchWithTimeout(targetUrl, { ...fallbackOptions, headers }, timeoutMs);
-      } finally {
-        releaseUpstreamSlot();
-      }
-
-      if (res.ok) {
-        stat.success++;
-        // Mark response as fallback so client knows
-        const originalRes = res;
-        // If we need to convert response format (OpenAI → Anthropic)
-        if (requestVendor === "anthropic" && fallbackUp.vendor === "openai") {
-          const openaiData = await res.json();
-          const anthropicData = convertOpenAIResponseToAnthropic(openaiData, reqCtx.model || "claude-opus-4-7");
-          anthropicData._bridge_fallback = true;
-          anthropicData._bridge_fallback_model = fallbackModel;
-          anthropicData._bridge_fallback_vendor = fallbackUp.vendor;
-          // Return a synthetic Response-like object
-          return {
-            ok: true,
-            status: 200,
-            headers: new Map([["x-bridge-fallback", "true"], ["x-bridge-fallback-model", fallbackModel]]),
-            json: async () => anthropicData,
-            text: async () => JSON.stringify(anthropicData),
-            clone: () => ({ text: async () => JSON.stringify(anthropicData), json: async () => anthropicData }),
-            body: null,
-            _isFallback: true,
-          };
+        await acquireUpstreamSlot();
+        let res;
+        try {
+          res = await fetchWithTimeout(targetUrl, { ...fallbackOptions, headers }, timeoutMs);
+        } finally {
+          releaseUpstreamSlot();
         }
-        return res;
+
+        if (res.ok) {
+          stat.success++;
+          if (requestVendor === "anthropic" && fallbackUp.vendor === "openai") {
+            const openaiData = await res.json();
+            const anthropicData = convertOpenAIResponseToAnthropic(openaiData, reqCtx.model || "claude-opus-4-7");
+            anthropicData._bridge_fallback = true;
+            anthropicData._bridge_fallback_model = fallbackModel;
+            anthropicData._bridge_fallback_vendor = fallbackUp.vendor;
+            return attachBridgeMeta({
+              ok: true,
+              status: 200,
+              headers: new Map([["x-bridge-fallback", "true"], ["x-bridge-fallback-model", fallbackModel]]),
+              json: async () => anthropicData,
+              text: async () => JSON.stringify(anthropicData),
+              clone: () => ({ text: async () => JSON.stringify(anthropicData), json: async () => anthropicData }),
+              body: null,
+              _isFallback: true,
+            }, {
+              route: reqCtx.route || null,
+              requestVendor,
+              providerAttempts,
+              failureTrail,
+              fallbackUsed: true,
+              fallbackVendor: fallbackUp.vendor,
+              fallbackModel,
+              upstreamId: fallbackUp.id,
+              upstreamName: fallbackUp.name || fallbackUp.id,
+              servedModel: fallbackModel,
+            });
+          }
+          return attachBridgeMeta(res, {
+            route: reqCtx.route || null,
+            requestVendor,
+            providerAttempts,
+            failureTrail,
+            fallbackUsed: true,
+            fallbackVendor: fallbackUp.vendor,
+            fallbackModel,
+            upstreamId: fallbackUp.id,
+            upstreamName: fallbackUp.name || fallbackUp.id,
+            servedModel: fallbackModel,
+          });
+        }
+
+        const fallbackBody = await res.clone().text().catch(() => "");
+        const fallbackReqId = parseUpstreamRequestId(fallbackBody);
+        stat.errors++;
+        failureTrail.push({
+          type: "cross_vendor_fallback_failed",
+          upstreamId: fallbackUp.id,
+          upstreamName: fallbackUp.name || fallbackUp.id,
+          status: res.status,
+          upstreamRequestId: fallbackReqId,
+          message: truncateText(fallbackBody),
+        });
+        throw createBridgeError("cross_vendor_fallback_failed", `Cross-vendor fallback failed with HTTP ${res.status}.`, {
+          route: reqCtx.route || null,
+          model: reqCtx.model || null,
+          fallbackVendor: fallbackUp.vendor || null,
+          fallbackModel,
+          upstreamId: fallbackUp.id,
+          upstreamName: fallbackUp.name || fallbackUp.id,
+          upstreamStatus: res.status,
+          upstreamRequestId: fallbackReqId,
+          upstreamBody: truncateText(fallbackBody),
+          providerAttempts,
+          failureTrail,
+          fallbackTrail,
+        }, 502);
+      } catch (err) {
+        if (err?.bridgeType) throw err;
+        stat.errors++;
+        failureTrail.push({
+          type: "cross_vendor_fallback_failed",
+          upstreamId: fallbackUp.id,
+          upstreamName: fallbackUp.name || fallbackUp.id,
+          status: 0,
+          message: err.message,
+        });
+        throw createBridgeError("cross_vendor_fallback_failed", "Cross-vendor fallback failed before a usable response was returned.", {
+          route: reqCtx.route || null,
+          model: reqCtx.model || null,
+          fallbackVendor: fallbackUp.vendor || null,
+          fallbackModel,
+          upstreamId: fallbackUp.id,
+          upstreamName: fallbackUp.name || fallbackUp.id,
+          upstreamBody: truncateText(err.message),
+          providerAttempts,
+          failureTrail,
+          fallbackTrail,
+        }, 502);
       }
-      stat.errors++;
-    } catch (err) {
-      releaseUpstreamSlot();
-      stat.errors++;
     }
   }
 
-  throw new Error("All upstreams failed (including cross-vendor fallback)");
+  const finalType = deriveFinalFailureType(failureTrail);
+  throw createBridgeError(finalType, disableCrossVendorFallback
+    ? "All Anthropic-compatible upstreams failed and cross-vendor fallback is disabled for this request."
+    : "All upstreams failed.", {
+    route: reqCtx.route || null,
+    requestVendor,
+    model: reqCtx.model || null,
+    providerAttempts,
+    failureTrail,
+    fallbackTrail,
+    disableCrossVendorFallback,
+  }, BRIDGE_ERROR_STATUS[finalType] || 502);
 };
-
 // ============================================================
 // 12. AUTH MIDDLEWARE
 // ============================================================
@@ -1703,23 +2032,55 @@ app.get("/v1/models", instrument("/v1/models"), checkAuth, async (req, res) => {
 });
 
 // POST /v1/chat/completions (proxy auth)
-app.post("/v1/chat/completions", instrument("/v1/chat/completions"), checkAuth, async (req, res) => {
-  const guard = preflightGuardrails(req.body, "/v1/chat/completions");
+const chatCompletionsHandler = async (req, res) => {
+  const routePath = req.path === "/chat/completions" ? "/chat/completions" : "/v1/chat/completions";
+  const diagnostics = buildRequestDiagnostics(req);
+  const guard = preflightGuardrails(req.body, routePath);
   if (guard.blocked) {
-    return res.status(guard.status).json({ error: { message: guard.reason, type: "guardrail_block" } });
+    logChatCompletionsEvent("guardrail_block", {
+      route: routePath,
+      model: req.body?.model || config.defaultModel,
+      reason: guard.reason,
+      diagnostics,
+    });
+    return res.status(guard.status).json({ error: { message: guard.reason, type: "guardrail_block", details: diagnostics } });
   }
 
-  // Política da key: allowlist de modelos (403) + caps de token/BRL (429)
   const policy = enforceKeyPolicy(req);
-  if (policy.blocked) return res.status(policy.status).json(policy.body);
+  if (policy.blocked) {
+    logChatCompletionsEvent("policy_block", {
+      route: routePath,
+      model: req.body?.model || config.defaultModel,
+      status: policy.status,
+      diagnostics,
+    });
+    if (policy.body?.error && !policy.body.error.details) policy.body.error.details = diagnostics;
+    return res.status(policy.status).json(policy.body);
+  }
 
   const upstreams = getEnabledUpstreams();
-  if (!upstreams.length) return res.status(503).json({ error: { message: "No upstreams available" } });
+  if (!upstreams.length) {
+    return res.status(503).json({ error: { message: "No upstreams available", type: "all_upstreams_failed", details: diagnostics } });
+  }
 
   const anthropicBody = convertOpenAIToAnthropic(req.body);
   const isStream = req.body.stream === true;
   const reqModel = req.body.model || config.defaultModel;
   const _usageStart = Date.now();
+  const hasDocument = diagnostics.hasDocument;
+  const providerCandidates = upstreams
+    .filter((u) => (u.vendor || "anthropic") === "anthropic" && u.enabled !== false)
+    .map((u) => ({ id: u.id, name: u.name || u.id, vendor: u.vendor || "anthropic", baseUrl: u.baseUrl }));
+
+  logChatCompletionsEvent("request_start", {
+    route: routePath,
+    model: reqModel,
+    isStream,
+    hasDocument,
+    diagnostics,
+    providerCandidates,
+    crossVendorFallbackAllowed: !hasDocument,
+  });
 
   try {
     const upstreamRes = await fetchUpstream(
@@ -1729,34 +2090,120 @@ app.post("/v1/chat/completions", instrument("/v1/chat/completions"), checkAuth, 
         headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" },
         body: JSON.stringify(anthropicBody),
       },
-      { upstreams, route: "/v1/chat/completions", method: "POST", apiKeyName: req.apiKeyName, model: reqModel, userId: req.headers["x-user-id"] || req.apiKeyName, requestVendor: "anthropic" }
+      {
+        upstreams,
+        route: routePath,
+        method: "POST",
+        apiKeyName: req.apiKeyName,
+        model: reqModel,
+        userId: req.headers["x-user-id"] || req.apiKeyName,
+        requestVendor: "anthropic",
+        disableCrossVendorFallback: hasDocument,
+      }
     );
+    const upstreamMeta = upstreamRes?._bridgeMeta || {};
 
+    setBridgeResponseHeaders(res, upstreamMeta, routePath);
     if (!upstreamRes.ok) {
       const errBody = await upstreamRes.text().catch(() => "");
+      const errInfo = classifyUpstreamHttpFailure(upstreamRes.status, errBody, upstreamMeta, diagnostics);
       touchApiKey(req.apiKeyObj, true);
-      pushUsageLog({ keyName: req.apiKeyName || 'unknown', model: reqModel, route: '/v1/chat/completions', upstream: (upstreams[0]||{}).name || '\u2014', tokensIn: 0, tokensOut: 0, costUsd: 0, durationMs: Date.now() - _usageStart, ok: false, requestId: parseUpstreamRequestId(errBody) });
-      return res.status(upstreamRes.status).json({ error: { message: errBody } });
+      pushUsageLog({
+        keyName: req.apiKeyName || "unknown",
+        model: reqModel,
+        route: routePath,
+        upstream: upstreamMeta.upstreamName || (upstreams[0] || {}).name || "—",
+        tokensIn: 0,
+        tokensOut: 0,
+        costUsd: 0,
+        durationMs: Date.now() - _usageStart,
+        ok: false,
+        requestId: errInfo.details.upstreamRequestId || parseUpstreamRequestId(errBody),
+      });
+      logChatCompletionsEvent("request_error", {
+        route: routePath,
+        model: reqModel,
+        type: errInfo.type,
+        status: errInfo.status,
+        diagnostics,
+        upstream: upstreamMeta,
+        failureTrail: upstreamMeta.failureTrail || [],
+      });
+      return res.status(errInfo.status).json({ error: { type: errInfo.type, message: errInfo.message, details: errInfo.details } });
     }
     touchApiKey(req.apiKeyObj, false);
 
+    logChatCompletionsEvent("request_upstream_ok", {
+      route: routePath,
+      model: reqModel,
+      diagnostics,
+      upstream: upstreamMeta,
+    });
+
     if (isStream) {
       await sendOpenAIStream(upstreamRes, res, reqModel);
-    } else {
-      const data = await upstreamRes.json();
-      const _upName = (upstreams[0]||{}).name || '\u2014';
-      const _reqId = data.id || null;
-      recordUsage(data.usage, req, { model: reqModel, route: '/v1/chat/completions', upstream: _upName, durationMs: Date.now() - _usageStart, ok: true, requestId: _reqId });
-      detectModelSwap(reqModel, data.model, "/v1/chat/completions");
-      res.json(convertAnthropicToOpenAI(data, reqModel));
+      return;
     }
+
+    const data = await upstreamRes.json();
+    const servedModel = data.model || reqModel;
+    const upstreamName = upstreamMeta.upstreamName || (upstreams[0] || {}).name || "—";
+    const _reqId = data.id || null;
+    res.setHeader("x-bridge-served-model", servedModel);
+    recordUsage(data.usage, req, {
+      model: reqModel,
+      servedModel,
+      servedProvider: upstreamMeta.fallbackUsed ? upstreamMeta.fallbackVendor || upstreamName : upstreamName,
+      route: routePath,
+      upstream: upstreamName,
+      durationMs: Date.now() - _usageStart,
+      ok: true,
+      requestId: _reqId,
+    });
+    detectModelSwap(reqModel, data.model, routePath);
+    const openaiResponse = convertAnthropicToOpenAI(data, reqModel);
+    if (upstreamMeta.fallbackUsed) {
+      openaiResponse._bridge_fallback = true;
+      openaiResponse._bridge_fallback_vendor = upstreamMeta.fallbackVendor || null;
+      openaiResponse._bridge_fallback_model = upstreamMeta.fallbackModel || null;
+    }
+    res.json(openaiResponse);
   } catch (err) {
     touchApiKey(req.apiKeyObj, true);
-    pushUsageLog({ keyName: req.apiKeyName || 'unknown', model: reqModel, route: '/v1/chat/completions', upstream: '\u2014', tokensIn: 0, tokensOut: 0, costUsd: 0, durationMs: Date.now() - _usageStart, ok: false, requestId: null });
-    res.status(502).json({ error: { message: err.message } });
+    const routeError = buildRouteError(err, "Bridge request failed", diagnostics);
+    pushUsageLog({
+      keyName: req.apiKeyName || "unknown",
+      model: reqModel,
+      route: routePath,
+      upstream: routeError.details.upstreamName || "—",
+      tokensIn: 0,
+      tokensOut: 0,
+      costUsd: 0,
+      durationMs: Date.now() - _usageStart,
+      ok: false,
+      requestId: routeError.details.upstreamRequestId || null,
+    });
+    logChatCompletionsEvent("request_exception", {
+      route: routePath,
+      model: reqModel,
+      type: routeError.type,
+      status: routeError.status,
+      diagnostics,
+      details: routeError.details,
+    });
+    setBridgeResponseHeaders(res, routeError.details, routePath);
+    return res.status(routeError.status).json({
+      error: {
+        type: routeError.type,
+        message: routeError.message,
+        details: routeError.details,
+      },
+    });
   }
-});
+};
 
+app.post("/v1/chat/completions", instrument("/v1/chat/completions"), checkAuth, chatCompletionsHandler);
+app.post("/chat/completions", instrument("/chat/completions"), checkAuth, chatCompletionsHandler);
 
 // ── Auto-cache: inject cache_control on stable/large blocks (max 4 breakpoints) ──
 // Only for Anthropic /v1/messages. Respects existing cache_control from client.
