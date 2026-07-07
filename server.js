@@ -16,6 +16,8 @@ import { checkPlanLimits, recordPortalUsage, setQuotaConfig, getQuotaConfig, get
 import { estimateBrl } from './portal/cost-config.js';
 import { backfillSnapshots } from './portal/billing.js';
 import { initDB } from './portal/db.js';
+import { initRequestLogger } from './request-logger.js';
+import { requestLoggingMiddleware, attachUsageToRequest } from './logging-middleware.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -328,6 +330,9 @@ app.use((err, req, res, next) => {
   }
   return next(err);
 });
+
+// Middleware de logging estruturado
+app.use(requestLoggingMiddleware);
 
 const PORT = Number(process.env.PORT) || 8787;
 
@@ -708,6 +713,15 @@ const recordUsage = (usage, req, meta) => {
     outputTokens,
     cacheWrite: cacheWriteTokens,
     cacheRead: cacheReadTokens,
+  });
+
+  // Enriquece o log estruturado da request com dados de uso
+  attachUsageToRequest(req, {
+    provider: servedProvider || meta?.upstream || 'unknown',
+    model: servedModel,
+    inputTokens,
+    outputTokens,
+    costBrl: brl,
   });
 
   // Record portal usage if this is a portal key (grava served_model/provider p/ cálculo BRL)
@@ -2439,10 +2453,120 @@ app.use(cookieParser());
 app.use('/portal', portalRouter);
 
 // ============================================================
-// 16. START SERVER
+// 15b. REQUEST LOGS API
+// ============================================================
+
+import { queryLogs, getLogsSummary, getLogById } from './request-logger.js';
+
+// GET /admin/logs — Query request logs with filters
+app.get("/admin/logs", checkDashboardAuth, (req, res) => {
+  const filters = {
+    keyId: req.query.keyId || req.query.key_id,
+    model: req.query.model,
+    statusCode: req.query.status ? parseInt(req.query.status) : undefined,
+    success: req.query.success !== undefined ? req.query.success === 'true' : undefined,
+    fromDate: req.query.from || req.query.fromDate,
+    toDate: req.query.to || req.query.toDate,
+    limit: Math.min(parseInt(req.query.limit) || 100, 1000),
+    offset: parseInt(req.query.offset) || 0,
+  };
+
+  const logs = queryLogs(filters);
+  res.json({ logs, count: logs.length, filters });
+});
+
+// GET /admin/logs/summary — Aggregated stats
+app.get("/admin/logs/summary", checkDashboardAuth, (req, res) => {
+  const filters = {
+    keyId: req.query.keyId || req.query.key_id,
+    fromDate: req.query.from || req.query.fromDate,
+    toDate: req.query.to || req.query.toDate,
+  };
+
+  // Resolve period shortcuts (24h, 7d, 30d)
+  if (req.query.period) {
+    const now = new Date();
+    const periodMap = {
+      '24h': 24 * 60 * 60 * 1000,
+      '7d': 7 * 24 * 60 * 60 * 1000,
+      '30d': 30 * 24 * 60 * 60 * 1000,
+    };
+    const ms = periodMap[req.query.period];
+    if (ms) {
+      filters.fromDate = new Date(now.getTime() - ms).toISOString();
+      filters.toDate = now.toISOString();
+    }
+  }
+
+  const summary = getLogsSummary(filters);
+  res.json({ summary, filters });
+});
+
+// GET /admin/logs/:requestId — Single request details
+app.get("/admin/logs/:requestId", checkDashboardAuth, (req, res) => {
+  const log = getLogById(req.params.requestId);
+  if (!log) {
+    return res.status(404).json({ error: "Log not found" });
+  }
+  res.json(log);
+});
+
+// GET /admin/logs/export/csv — Export logs as CSV
+app.get("/admin/logs/export/csv", checkDashboardAuth, (req, res) => {
+  const filters = {
+    keyId: req.query.keyId || req.query.key_id,
+    model: req.query.model,
+    fromDate: req.query.from || req.query.fromDate,
+    toDate: req.query.to || req.query.toDate,
+    limit: Math.min(parseInt(req.query.limit) || 10000, 50000),
+    offset: 0,
+  };
+
+  const logs = queryLogs(filters);
+
+  // Build CSV
+  const headers = [
+    'timestamp', 'request_id', 'key_name', 'method', 'endpoint',
+    'client_ip', 'provider', 'model', 'input_tokens', 'output_tokens',
+    'total_tokens', 'cost_brl', 'status_code', 'success', 'latency_ms',
+    'error_message'
+  ];
+
+  const rows = logs.map(log => [
+    log.timestamp,
+    log.request_id,
+    log.key_name || '',
+    log.method,
+    log.endpoint,
+    log.client_ip || '',
+    log.provider || '',
+    log.model || '',
+    log.input_tokens,
+    log.output_tokens,
+    log.total_tokens,
+    log.cost_brl,
+    log.status_code,
+    log.success ? 'true' : 'false',
+    log.latency_ms,
+    (log.error_message || '').replace(/"/g, '""'),
+  ]);
+
+  const csv = [
+    headers.join(','),
+    ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+  ].join('\n');
+
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', `attachment; filename="bridge-logs-${new Date().toISOString().slice(0,10)}.csv"`);
+  res.send(csv);
+});
+
+// ============================================================
+// 16. PORTAL INTEGRATION
 // ============================================================
 (async () => {
   await initDB();
+  await initRequestLogger();
   app.listen(PORT, () => {
     console.log(`Claude Bridge v2.0.0-smart-routing listening on port ${PORT}`);
     console.log(`Config path: ${CONFIG_PATH}`);
