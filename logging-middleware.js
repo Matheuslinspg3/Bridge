@@ -31,14 +31,6 @@ export function requestLoggingMiddleware(req, res, next) {
     referer: req.headers['referer'] || req.headers['referrer'] || null,
   };
 
-  // Captura key info se disponível
-  if (req.apiKeyObj) {
-    metadata.keyId = req.apiKeyObj.id || null;
-    metadata.keyName = req.apiKeyObj.name || null;
-  } else if (req.apiKeyName) {
-    metadata.keyName = req.apiKeyName;
-  }
-
   // Anexa metadata à request para acesso posterior
   req.logMetadata = metadata;
 
@@ -68,6 +60,14 @@ export function requestLoggingMiddleware(req, res, next) {
   // Hook no evento finish para gravar log completo
   res.on('finish', () => {
     const latencyMs = Date.now() - startTime;
+
+    // Captura key info AGORA (após checkAuth ter rodado)
+    if (req.apiKeyObj) {
+      metadata.keyId = req.apiKeyObj.id || null;
+      metadata.keyName = req.apiKeyObj.name || null;
+    } else if (req.apiKeyName) {
+      metadata.keyName = req.apiKeyName;
+    }
 
     // Monta log entry completo
     const logEntry = {
