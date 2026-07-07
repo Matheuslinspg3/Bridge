@@ -573,7 +573,8 @@
           return;
         }
 
-        const logs = await response.json();
+        const data = await response.json();
+        const logs = data.logs || data;
 
         loading.style.display = 'none';
 
