@@ -6,6 +6,8 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 COPY server.js ./
+COPY request-logger.js ./
+COPY logging-middleware.js ./
 COPY public ./public
 COPY portal ./portal
 
