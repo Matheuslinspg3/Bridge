@@ -253,6 +253,15 @@ const resolveAllowedModels = (req) => {
   return Array.isArray(req.apiKeyObj?.allowedModels) ? req.apiKeyObj.allowedModels : [];
 };
 
+// Aplica model aliasing (mapeia modelo solicitado → modelo real do upstream)
+// Ex: cliente pede "claude-3-5-sonnet-20241022" → Bridge envia "moonshot-v1-8k"
+const applyModelAlias = (requestedModel) => {
+  if (!config.modelAliases || typeof config.modelAliases !== 'object') {
+    return requestedModel;
+  }
+  return config.modelAliases[requestedModel] || requestedModel;
+};
+
 // Aplica a política da key ANTES de montar o failover chain.
 // Retorna { blocked, status, body } — status/body preenchidos quando bloqueado.
 const enforceKeyPolicy = (req) => {
@@ -2080,6 +2089,8 @@ const chatCompletionsHandler = async (req, res) => {
   const anthropicBody = convertOpenAIToAnthropic(req.body);
   const isStream = req.body.stream === true;
   const reqModel = req.body.model || config.defaultModel;
+  const aliasedReqModel = applyModelAlias(reqModel);
+  anthropicBody.model = aliasedReqModel;
   const _usageStart = Date.now();
   const hasDocument = diagnostics.hasDocument;
   const providerCandidates = upstreams
@@ -2327,7 +2338,8 @@ const messagesHandler = async (req, res) => {
       if (isCircuitOpen(provider.id, model.name)) continue;
 
       const targetUrl = provider.baseUrl + '/v1/messages';
-      const body = { ...rawBody, model: model.name };
+      const aliasedModelName = applyModelAlias(model.name);
+      const body = { ...rawBody, model: aliasedModelName };
 
       try {
         const controller = new AbortController();
@@ -2403,7 +2415,8 @@ const messagesHandler = async (req, res) => {
   }
 
   // ── Legacy path: fetchUpstream ──
-  const body = rawBody;
+  const aliasedReqModel = applyModelAlias(reqModel);
+  const body = { ...rawBody, model: aliasedReqModel };
   try {
     const upstreamRes = await fetchUpstream(
       "/v1/messages",
